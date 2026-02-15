@@ -48,6 +48,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ollama:
+        condition: service_started
     restart: unless-stopped
 
   # ── PostgreSQL ──────────────────────────────────────────────
@@ -80,5 +82,24 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── Ollama (local AI) ──────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Uncomment "deploy" block below if you have an NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  ollama_data:
+

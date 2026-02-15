@@ -32,3 +32,5 @@ services:
     volumes:
       - ./backend/app:/app/app
     command: celery -A app.celery_app worker --loglevel=debug --concurrency=1
+    environment:
+      - CELERY_WORKER_HIJACK_ROOT_LOGGER=false

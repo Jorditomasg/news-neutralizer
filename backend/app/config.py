@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # ── Rate Limiting ─────────────────────────────────────────
     rate_limit_per_minute: int = 30
 
+    # ── Ollama ────────────────────────────────────────────────
+    ollama_url: str = "http://ollama:11434"
+    ollama_model: str = "llama3.1"
+
+    @property
+    def sync_database_url(self) -> str:
+        """Convert async DB URL to sync for Celery workers."""
+        return self.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]

@@ -2,6 +2,11 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import json
+import re
+import structlog
+
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -53,28 +58,157 @@ class AIProvider(ABC):
         """Estimate the cost in USD for a given token count."""
         ...
 
-    async def analyze_articles(self, articles: list[dict]) -> AnalysisResult:
-        """
-        Analyze a set of articles for bias and generate a neutralized summary.
-        Uses a structured prompt and parses the JSON response.
-        """
-        import json
+    # ── Robust JSON extraction ──────────────────────────────────
 
-        prompt = self._build_analysis_prompt(articles)
-        response = await self.analyze(prompt, max_tokens=4000)
+    @staticmethod
+    def _extract_json_string_value(text: str, key: str) -> str | None:
+        """Extract a JSON string value for a given key, handling escaped chars."""
+        pattern = rf'"{key}"\s*:\s*"'
+        match = re.search(pattern, text)
+        if not match:
+            return None
 
-        # Parse JSON from the response
+        start = match.end()
+        result_chars = []
+        i = start
+        while i < len(text):
+            ch = text[i]
+            if ch == '\\' and i + 1 < len(text):
+                next_ch = text[i + 1]
+                if next_ch == 'n':
+                    result_chars.append('\n')
+                elif next_ch == 't':
+                    result_chars.append('\t')
+                elif next_ch == '"':
+                    result_chars.append('"')
+                elif next_ch == '\\':
+                    result_chars.append('\\')
+                else:
+                    result_chars.append(next_ch)
+                i += 2
+                continue
+            if ch == '"':
+                # End of string
+                return ''.join(result_chars)
+            result_chars.append(ch)
+            i += 1
+
+        # String was truncated — return what we have
+        return ''.join(result_chars)
+
+    @staticmethod
+    def _extract_json_array(text: str, key: str) -> list | None:
+        """Extract a JSON array value for a given key. Returns complete items only."""
+        pattern = rf'"{key}"\s*:\s*\['
+        match = re.search(pattern, text)
+        if not match:
+            return None
+
+        start = match.end()
+        # Find the matching closing bracket
+        depth = 1
+        i = start
+        in_str = False
+        while i < len(text) and depth > 0:
+            ch = text[i]
+            if ch == '\\' and in_str:
+                i += 2
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+            i += 1
+
+        array_content = text[start:i - 1] if depth == 0 else text[start:]
+
+        # For string arrays: extract individual strings
+        if key == "objective_facts":
+            facts = []
+            for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', array_content):
+                fact = m.group(1).replace('\\"', '"').replace('\\n', '\n')
+                facts.append(fact)
+            return facts
+
+        # For object arrays (bias_elements): extract complete objects
+        items = []
+        brace_depth = 0
+        obj_start = None
+        in_string = False
+        for idx in range(len(array_content)):
+            ch = array_content[idx]
+            if ch == '\\' and in_string:
+                continue
+            if ch == '"' and (idx == 0 or array_content[idx - 1] != '\\'):
+                in_string = not in_string
+            elif not in_string:
+                if ch == '{':
+                    if brace_depth == 0:
+                        obj_start = idx
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0 and obj_start is not None:
+                        obj_str = array_content[obj_start:idx + 1]
+                        try:
+                            items.append(json.loads(obj_str))
+                        except json.JSONDecodeError:
+                            pass
+                        obj_start = None
+        return items
+
+    @staticmethod
+    def _extract_json_object(text: str, key: str) -> dict | None:
+        """Extract a JSON object value for a given key."""
+        pattern = rf'"{key}"\s*:\s*\{{'
+        match = re.search(pattern, text)
+        if not match:
+            return None
+
+        start = match.start() + len(match.group()) - 1  # at the '{'
+        depth = 0
+        in_str = False
+        i = start
+        while i < len(text):
+            ch = text[i]
+            if ch == '\\' and in_str:
+                i += 2
+                continue
+            if ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        obj_str = text[start:i + 1]
+                        try:
+                            return json.loads(obj_str)
+                        except json.JSONDecodeError:
+                            return None
+            i += 1
+        return None
+
+    def _parse_response(self, response: str) -> AnalysisResult:
+        """
+        Parse the AI response into an AnalysisResult.
+        Uses multiple strategies: direct JSON parse, then regex field extraction.
+        """
+        # Strip markdown code blocks if present
+        text = response.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+
+        # Strategy 1: Try direct JSON parse (ideal case)
         try:
-            # Try to extract JSON from possible markdown code blocks
-            if "```json" in response:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-            elif "```" in response:
-                json_str = response.split("```")[1].split("```")[0].strip()
-            else:
-                json_str = response.strip()
-
-            data = json.loads(json_str)
-
+            data = json.loads(text)
+            logger.info("AI response parsed directly as valid JSON")
             return AnalysisResult(
                 topic_summary=data.get("topic_summary", ""),
                 objective_facts=data.get("objective_facts", []),
@@ -82,60 +216,87 @@ class AIProvider(ABC):
                 neutralized_summary=data.get("neutralized_summary", ""),
                 source_bias_scores=data.get("source_bias_scores", {}),
             )
-        except (json.JSONDecodeError, IndexError, KeyError) as e:
-            # Fallback: return raw response as summary
-            return AnalysisResult(
-                topic_summary="Error parsing AI response",
-                objective_facts=[],
-                bias_elements=[],
-                neutralized_summary=response[:2000],
-                source_bias_scores={},
+        except json.JSONDecodeError:
+            logger.warning("Direct JSON parse failed, using regex extraction")
+
+        # Strategy 2: Extract fields individually with regex (handles truncation)
+        topic = self._extract_json_string_value(text, "topic_summary") or ""
+        facts = self._extract_json_array(text, "objective_facts") or []
+        bias = self._extract_json_array(text, "bias_elements") or []
+        summary = self._extract_json_string_value(text, "neutralized_summary") or ""
+        scores = self._extract_json_object(text, "source_bias_scores") or {}
+
+        # Check if we got anything useful
+        has_content = bool(topic or facts or bias or summary)
+        if has_content:
+            logger.info(
+                "Extracted partial AI response",
+                topic_len=len(topic),
+                facts_count=len(facts),
+                bias_count=len(bias),
+                summary_len=len(summary),
+                has_scores=bool(scores),
             )
+            return AnalysisResult(
+                topic_summary=topic,
+                objective_facts=facts,
+                bias_elements=bias,
+                neutralized_summary=summary,
+                source_bias_scores=scores,
+            )
+
+        # Nothing could be parsed
+        logger.error("Could not extract any fields from AI response",
+                      response_preview=text[:300])
+        return AnalysisResult(
+            topic_summary="No se pudo procesar la respuesta de la IA",
+            objective_facts=[],
+            bias_elements=[],
+            neutralized_summary=text[:2000],
+            source_bias_scores={},
+        )
+
+    async def analyze_articles(self, articles: list[dict]) -> AnalysisResult:
+        """
+        Analyze a set of articles for bias and generate a neutralized summary.
+        """
+        prompt = self._build_analysis_prompt(articles)
+        response = await self.analyze(prompt, max_tokens=4096)
+        return self._parse_response(response)
 
     def _build_analysis_prompt(self, articles: list[dict]) -> str:
         """Build the structured analysis prompt."""
+        # Limit to 5 articles max to keep context manageable
+        limited = articles[:5]
         articles_text = ""
-        for i, article in enumerate(articles, 1):
+        for i, article in enumerate(limited, 1):
             articles_text += f"\n--- ARTÍCULO {i} ---\n"
             articles_text += f"Fuente: {article.get('source_name', 'Desconocida')}\n"
             articles_text += f"Título: {article.get('title', '')}\n"
-            articles_text += f"Texto: {article.get('body', '')[:3000]}\n"
+            articles_text += f"Texto: {article.get('body', '')[:1500]}\n"
 
-        return f"""Eres un analista de medios experto en detectar sesgo informativo.
-
-Analiza los siguientes artículos sobre el mismo tema y genera un informe estructurado.
+        return f"""Analiza estos artículos sobre el mismo tema. Detecta sesgos y redacta un resumen neutral.
 
 {articles_text}
 
-Genera un JSON con esta estructura exacta:
+Responde SOLO con JSON válido con esta estructura:
+
 {{
-  "topic_summary": "Resumen del tema en 1-2 frases",
-  "objective_facts": [
-    "Hecho verificable 1",
-    "Hecho verificable 2"
-  ],
+  "topic_summary": "Descripción del tema en 2-3 frases",
+  "objective_facts": ["hecho 1", "hecho 2", "hecho 3", "hecho 4", "hecho 5"],
   "bias_elements": [
     {{
       "source": "nombre del medio",
-      "type": "sensacionalismo|omisión|framing|adjetivación|falacia",
-      "original_text": "texto original del artículo",
-      "explanation": "por qué es sesgo y no información factual",
-      "severity": 1
+      "type": "sensacionalismo|omisión|framing|adjetivación",
+      "original_text": "cita textual breve",
+      "explanation": "por qué es sesgo",
+      "severity": 3
     }}
   ],
-  "neutralized_summary": "Resumen basado exclusivamente en hechos verificables, sin adjetivos valorativos ni framing editorial",
+  "neutralized_summary": "Resumen neutral de 200-300 palabras. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
   "source_bias_scores": {{
-    "nombre_medio": {{
-      "score": 0.5,
-      "direction": "izquierda|centro|derecha|sensacionalista",
-      "confidence": 0.8
-    }}
+    "nombre del medio": {{"score": 0.5, "direction": "izquierda|centro|derecha", "confidence": 0.7}}
   }}
 }}
 
-IMPORTANTE:
-- Responde SOLO con el JSON, sin texto adicional.
-- Sé riguroso: distingue entre hechos verificables y opiniones presentadas como hechos.
-- Para severity, usa 1 (mínimo) a 5 (máximo).
-- Para score, usa 0.0 (sin sesgo) a 1.0 (sesgo extremo).
-"""
+IMPORTANTE: El JSON debe ser válido. Usa comillas dobles. No incluyas texto fuera del JSON."""

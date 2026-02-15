@@ -66,7 +66,7 @@ class Article(Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    author: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Topic cluster assignment
     bias_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0 (neutral) to 1.0 (very biased)
