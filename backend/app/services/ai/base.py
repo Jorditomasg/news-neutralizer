@@ -264,6 +264,25 @@ class AIProvider(ABC):
         response = await self.analyze(prompt, max_tokens=4096)
         return self._parse_response(response)
 
+    async def generate_search_query(self, title: str, body_preview: str) -> str:
+        """
+        Generate a semantic search query from an article's headline and body.
+        Returns a focused 5-8 word phrase capturing the specific event.
+        """
+        prompt = (
+            f"Titular: {title}\n"
+            f"Texto: {body_preview[:500]}\n\n"
+            "Genera una frase de búsqueda de 5 a 8 palabras que capture el EVENTO o DEBATE "
+            "específico de esta noticia. NO uses nombres de personas ni partidos políticos. "
+            "Céntrate en la acción, el tema concreto y el contexto.\n"
+            "Responde SOLO con la frase, sin comillas ni explicaciones."
+        )
+        result = await self.analyze(prompt, max_tokens=100)
+        # Clean up: take just the first line, strip quotes/whitespace
+        query = result.strip().split("\n")[0].strip().strip('"').strip("'")
+        logger.info("Generated semantic search query", original_title=title[:80], query=query)
+        return query
+
     def _build_analysis_prompt(self, articles: list[dict]) -> str:
         """Build the structured analysis prompt."""
         # Limit to 5 articles max to keep context manageable

@@ -47,6 +47,17 @@ class ArticlePreview(BaseModel):
     detected_topics: list[str] = Field(description="Auto-extracted topics/keywords")
 
 
+class ArticlePreviewResponse(BaseModel):
+    """Metadata preview of an article from URL."""
+    title: str
+    source_name: str
+    source_url: str
+    author: str | None = None
+    published_at: datetime | None = None
+    topics: list[str] = []
+
+
+
 class ArticleOut(BaseModel):
     """Full article in results."""
     model_config = ConfigDict(from_attributes=True)

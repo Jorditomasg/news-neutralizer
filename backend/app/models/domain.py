@@ -69,6 +69,7 @@ class Article(Base):
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cluster_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Topic cluster assignment
+    is_source: Mapped[bool] = mapped_column(Boolean, default=False)  # True if this is the user's submitted article
     bias_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0 (neutral) to 1.0 (very biased)
     bias_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # Detailed bias breakdown
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

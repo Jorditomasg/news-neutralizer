@@ -46,6 +46,13 @@ async def search_rss_feeds(
     # Determine which sources to search
     slugs_to_search = source_slugs or [s.slug for s in AVAILABLE_SOURCES if s.enabled]
 
+    # If source_slugs is empty/None, use Google News for better relevance on general topics
+    if not source_slugs and not slugs_to_search:
+        # Import here to avoid circular dependencies if any
+        from app.services.scraper.google_news import search_google_news_rss
+        return await search_google_news_rss(query, max_results=max_per_source * 3)
+
+    # Otherwise search specific RSS feeds
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         for slug in slugs_to_search:
             feed_urls = SOURCE_RSS_FEEDS.get(slug, [])

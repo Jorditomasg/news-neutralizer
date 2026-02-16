@@ -43,7 +43,14 @@ async def task_progress(websocket: WebSocket, task_id: str):
                     })
                     break
 
-                message = _status_message(task.status, task.progress)
+                # Use specific message from DB if available (stored in error_message col for now)
+                # unless it's a real error (status=failed)
+                db_msg = task.error_message
+                if db_msg and task.status != "failed":
+                    message = db_msg
+                else:
+                    message = _status_message(task.status, task.progress)
+
                 await websocket.send_json({
                     "task_id": task_id,
                     "status": task.status,
@@ -65,8 +72,8 @@ def _status_message(status: str, progress: int) -> str:
     """Generate a human-readable status message."""
     messages = {
         "pending": "Iniciando búsqueda...",
-        "scraping": f"Extrayendo artículos ({progress}%)...",
-        "analyzing": f"Analizando sesgo con IA ({progress}%)...",
+        "scraping": "Extrayendo artículos",
+        "analyzing": "Analizando sesgo con IA",
         "completed": "✅ Análisis completado",
         "failed": "❌ Error en el análisis",
         "preview": "Vista previa del artículo",
