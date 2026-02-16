@@ -1,0 +1,165 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import type { APIKeyInfo, AIProvider } from "@/types";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+const PROVIDERS: { id: AIProvider; name: string; description: string; keyPrefix: string }[] = [
+  { id: "openai", name: "OpenAI", description: "GPT-4o, GPT-4o-mini", keyPrefix: "sk-" },
+  { id: "anthropic", name: "Anthropic", description: "Claude 3.5 Sonnet", keyPrefix: "sk-ant-" },
+  { id: "google", name: "Google AI", description: "Gemini 2.0 Flash", keyPrefix: "" },
+  { id: "ollama", name: "Ollama (local)", description: "Llama 3.1, Mistral (sin API key)", keyPrefix: "" },
+];
+
+export default function SettingsPage() {
+  const [keys, setKeys] = useState<APIKeyInfo[]>([]);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [feedback, setFeedback] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    fetchKeys();
+  }, []);
+
+  const fetchKeys = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/settings/api-keys`);
+      if (res.ok) {
+        const data = await res.json();
+        setKeys(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch keys", e);
+    }
+  };
+
+  const saveKey = async (provider: AIProvider) => {
+    const value = inputValues[provider];
+    if (!value?.trim()) return;
+
+    setSaving(provider);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/settings/api-keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, api_key: value.trim() }),
+      });
+
+      if (res.ok) {
+        setFeedback({ ...feedback, [provider]: "✅ Guardada" });
+        setInputValues({ ...inputValues, [provider]: "" });
+        await fetchKeys();
+      } else {
+        setFeedback({ ...feedback, [provider]: "❌ Error al guardar" });
+      }
+    } catch (e) {
+      setFeedback({ ...feedback, [provider]: "❌ Error de conexión" });
+    } finally {
+      setSaving(null);
+      setTimeout(() => {
+        setFeedback((prev) => {
+          const next = { ...prev };
+          delete next[provider];
+          return next;
+        });
+      }, 3000);
+    }
+  };
+
+  const deleteKey = async (provider: string) => {
+    try {
+      await fetch(`${API_BASE}/api/v1/settings/api-keys/${provider}`, {
+        method: "DELETE",
+      });
+      await fetchKeys();
+    } catch (e) {
+      console.error("Failed to delete key", e);
+    }
+  };
+
+  const hasKey = (provider: string) => keys.some((k) => k.provider === provider);
+
+  return (
+    <div className="animate-fade-in max-w-2xl mx-auto">
+      <div className="mb-8">
+        <h1 className="font-display text-3xl font-bold">Configuración</h1>
+        <p className="mt-2 text-gray-400">
+          Configura tus claves API para los proveedores de IA. Las claves se cifran antes de
+          almacenarse.
+        </p>
+      </div>
+
+      {/* Security Notice */}
+      <div className="mb-8 rounded-2xl border border-teal-500/20 bg-teal-500/5 p-4">
+        <p className="text-sm text-teal-300">
+          🔒 Tus claves API se cifran con Fernet (AES-128-CBC) y nunca se exponen en texto
+          plano. Si no configuras ninguna clave, se usará Ollama local (gratis, sin API key).
+        </p>
+      </div>
+
+      {/* Provider Cards */}
+      <div className="space-y-4">
+        {PROVIDERS.map((provider) => (
+          <div
+            key={provider.id}
+            className="rounded-2xl border border-white/10 bg-white/[0.02] p-5"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-display font-semibold text-white">
+                  {provider.name}
+                </h3>
+                <p className="text-xs text-gray-500">{provider.description}</p>
+              </div>
+              {hasKey(provider.id) ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg px-2 py-1">
+                    Configurada
+                  </span>
+                  <button
+                    onClick={() => deleteKey(provider.id)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs text-gray-600 bg-white/5 rounded-lg px-2 py-1">
+                  {provider.id === "ollama" ? "No requiere clave" : "No configurada"}
+                </span>
+              )}
+            </div>
+
+            {/* Input (only for providers that need keys) */}
+            {provider.id !== "ollama" && (
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={inputValues[provider.id] || ""}
+                  onChange={(e) =>
+                    setInputValues({ ...inputValues, [provider.id]: e.target.value })
+                  }
+                  placeholder={`${provider.keyPrefix}...`}
+                  className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white placeholder-gray-600 outline-none focus:border-teal-400/40 focus:ring-1 focus:ring-teal-400/20"
+                />
+                <button
+                  onClick={() => saveKey(provider.id)}
+                  disabled={!inputValues[provider.id]?.trim() || saving === provider.id}
+                  className="rounded-xl bg-white/5 px-4 py-2 text-sm text-white transition-colors hover:bg-white/10 disabled:opacity-30"
+                >
+                  {saving === provider.id ? "..." : "Guardar"}
+                </button>
+              </div>
+            )}
+
+            {/* Feedback */}
+            {feedback[provider.id] && (
+              <p className="mt-2 text-xs text-gray-400">{feedback[provider.id]}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
