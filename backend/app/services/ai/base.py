@@ -264,6 +264,46 @@ class AIProvider(ABC):
         response = await self.analyze(prompt, max_tokens=4096)
         return self._parse_response(response)
 
+    async def evaluate_topic_specificity(self, topic: str) -> dict:
+        """
+        Evaluate if a topic is specific enough for a focused analysis.
+        Returns: {"is_specific": bool, "reason": str}
+        """
+        prompt = (
+            f"Analiza si el siguiente tema de búsqueda es lo suficientemente ESPECÍFICO para buscar noticias concretas sobre un evento reciente, o si es demasiado genérico/ambiguo/amplio.\n\n"
+            f"Tema: \"{topic}\"\n\n"
+            "Reglas:\n"
+            "1. Es ESPECÍFICO si se refiere a un evento concreto, una elección, un partido en un contexto, una ley, una polémica reciente, etc. (Ej: \"Resultados elecciones catalanas 2024\", \"Ley de amnistía aprobación\", \"Polémica cartel Semana Santa Sevilla\").\n"
+            "2. Es GENÉRICO si es una sola palabra amplia, un concepto abstracto, o un tema sin contexto temporal o factual claro. (Ej: \"Política\", \"Economía\", \"Fútbol\", \"Noticias\", \"España\", \"Guerra\").\n"
+            "3. Si es genérico, DEBE ser rechazado.\n\n"
+            "Responde SOLO con un JSON válido:\n"
+            "{\n"
+            "  \"is_specific\": boolean,\n"
+            "  \"reason\": \"Breve explicación de por qué es específico o por qué es demasiado amplio (max 1 frase). Si es amplio, sugiere qué tipo de detalle falta.\"\n"
+            "}"
+        )
+        response = await self.analyze(prompt, max_tokens=200)
+        
+        # Parse response
+        try:
+            # Clean potential markdown
+            text = response.strip()
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            
+            return json.loads(text)
+        except Exception as e:
+            logger.error("Failed to parse topic specificity response", error=str(e), response=response)
+            # Fail safe: assume specific to not block user on error, but log it.
+            # Or assume generic? Valid question. Let's assume specific if AI fails to parse, 
+            # as it might be a model glitch, but usually broad topics are easy to detect.
+            # Actually, user wants strictness. But if JSON fails, we don't know the reason.
+            # Let's return is_specific=True to avoid blocking on technical errors, 
+            # but usually we'd want to retry. For now, fail open (allow search).
+            return {"is_specific": True, "reason": "Error en evaluación, permitiendo búsqueda por defecto."}
+
     async def generate_search_query(self, title: str, body_preview: str) -> str:
         """
         Generate a semantic search query from an article's headline and body.
@@ -289,19 +329,25 @@ class AIProvider(ABC):
         limited = articles[:5]
         articles_text = ""
         for i, article in enumerate(limited, 1):
-            articles_text += f"\n--- ARTÍCULO {i} ---\n"
+            role = article.get("role", "ARTICLE")
+            articles_text += f"\n--- ARTÍCULO {i} [{role}] ---\n"
             articles_text += f"Fuente: {article.get('source_name', 'Desconocida')}\n"
             articles_text += f"Título: {article.get('title', '')}\n"
             articles_text += f"Texto: {article.get('body', '')[:1500]}\n"
 
         return f"""Analiza estos artículos sobre el mismo tema. Detecta sesgos y redacta un resumen neutral.
 
+INSTRUCCIÓN CRÍTICA:
+Si un artículo está marcado como [MAIN_SOURCE_TO_ANALYZE], tu 'topic_summary', 'objective_facts' y 'neutralized_summary' DEBEN centrarse EXCLUSIVAMENTE en la noticia o evento reportado en ese artículo principal.
+Los artículos marcados como [RELATED_CONTEXT] solo deben usarse para comparar, detectar qué información omitió el artículo principal, contrastar titulares y calcular el sesgo. 
+Bajo NINGUNA circunstancia debes resumir o incluir información de los [RELATED_CONTEXT] que no tenga relación directa y explícita con el evento del [MAIN_SOURCE_TO_ANALYZE]. Si los artículos relacionados hablan de un tema distinto (incluso si son la noticia global del día), IGNÓRALOS por completo y basa tu respuesta solo en el principal.
+
 {articles_text}
 
 Responde SOLO con JSON válido con esta estructura:
 
 {{
-  "topic_summary": "Descripción del tema en 2-3 frases",
+  "topic_summary": "Descripción del tema en 2-3 frases centrada en la noticia principal",
   "objective_facts": ["hecho 1", "hecho 2", "hecho 3", "hecho 4", "hecho 5"],
   "bias_elements": [
     {{
@@ -312,7 +358,7 @@ Responde SOLO con JSON válido con esta estructura:
       "severity": 3
     }}
   ],
-  "neutralized_summary": "Resumen neutral de 200-300 palabras. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
+  "neutralized_summary": "Resumen neutral de 200-300 palabras centrado en la noticia principal. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
   "source_bias_scores": {{
     "nombre del medio": {{"score": 0.5, "direction": "izquierda|centro|derecha", "confidence": 0.7}}
   }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import type { SearchTask, ArticlePreview } from "@/types";
 import { SearchProgress } from "@/components/search/SearchProgress";
@@ -8,7 +8,7 @@ import { SearchForm } from "@/components/search/SearchForm";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export default function SearchPage() {
+function SearchContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -25,6 +25,7 @@ export default function SearchPage() {
   const [headlines, setHeadlines] = useState<ArticlePreview[]>([]);
   const [showHeadlines, setShowHeadlines] = useState(false);
   const [selectedHeadline, setSelectedHeadline] = useState<ArticlePreview | null>(null);
+  const [isAmbiguous, setIsAmbiguous] = useState(false);
 
   const isUrl = (text: string) => {
     return text.startsWith("http://") || text.startsWith("https://");
@@ -138,14 +139,28 @@ export default function SearchPage() {
         body: JSON.stringify({ query: searchQuery }),
       });
 
-      if (!res.ok) throw new Error("Failed to start search");
+      if (!res.ok) {
+        const errorData = await res.json();
+        // Check for ambiguous topic error
+        if (res.status === 400 && errorData.detail && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
+          const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
+          setIsAmbiguous(true);
+          setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
+          setStatus("headlines_selection"); // Stay in selection mode
+          setShowHeadlines(true); // Ensure headlines are shown if available
+          return;
+        }
+        throw new Error(errorData.detail || "Failed to start search");
+      }
 
       const data = await res.json();
       setTaskId(data.task_id);
       setStatus("pending");
-    } catch (e) {
-      setError("No se pudo iniciar la búsqueda. ¿Está el backend corriendo?");
-      setStatus("error");
+    } catch (e: any) {
+      if (!isAmbiguous) {
+          setError(e.message || "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?");
+          setStatus("error");
+      }
       hasStarted.current = false;
     }
   };
@@ -388,12 +403,25 @@ export default function SearchPage() {
                   <br />Selecciona una noticia específica o analiza el tema en general.
                 </p>
               </div>
-              <button
-                onClick={() => startSearch(query)}
-                className="whitespace-nowrap px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-400 hover:to-cyan-500 text-white font-bold shadow-lg shadow-teal-500/20 transition-all transform hover:scale-105 active:scale-95 ring-1 ring-white/20"
-              >
-                ⚡ Analizar Tema Global
-              </button>
+              <div className="flex flex-col items-end gap-2">
+                {!isAmbiguous ? (
+                  <button
+                    onClick={() => startSearch(query)}
+                    className="whitespace-nowrap px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-400 hover:to-cyan-500 text-white font-bold shadow-lg shadow-teal-500/20 transition-all transform hover:scale-105 active:scale-95 ring-1 ring-white/20"
+                  >
+                    ⚡ Analizar Tema Global
+                  </button>
+                ) : (
+                  <div className="text-right">
+                    <span className="text-amber-400 text-xs font-bold uppercase tracking-wider bg-amber-500/10 px-2 py-1 rounded">
+                      Tema demasiado amplio
+                    </span>
+                    <p className="text-gray-400 text-xs mt-1 max-w-[200px]">
+                      Selecciona una noticia concreta para continuar.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -736,5 +764,13 @@ export default function SearchPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center text-teal-400">Cargando...</div>}>
+      <SearchContent />
+    </Suspense>
   );
 }

@@ -96,3 +96,21 @@ class AnalysisResult(Base):
 
     # Relationships
     search_task: Mapped["SearchTask"] = relationship(back_populates="analysis")
+
+
+class TopicCache(Base):
+    """
+    Cache for topic specificity checks.
+    
+    Used to quickly reject broad/generic topics without calling the AI provider
+    every time. The system 'learns' which topics are broad.
+    """
+
+    __tablename__ = "topic_cache"
+
+    topic_hash: Mapped[str] = mapped_column(String(64), primary_key=True)  # SHA256 of normalized topic
+    topic_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_specific: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

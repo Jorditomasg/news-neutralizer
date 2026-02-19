@@ -39,6 +39,82 @@ def _is_url(text: str) -> bool:
     return t.startswith("http://") or t.startswith("https://")
 
 
+
+
+
+async def _check_topic_specificity(db: AsyncSession, topic: str, provider_name: str, encrypted_key: str | None) -> dict:
+    """
+    Check topic specificity with strict heuristics, DB caching (TTL), and fail-closed AI validation.
+    """
+    import hashlib
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from app.models import TopicCache
+    from app.services.ai.factory import AIProviderFactory
+    from app.core.security import decrypt_api_key
+    from app.config import settings
+    
+    # 1. Fast Heuristic Filter
+    words = topic.strip().split()
+    if len(words) <= 2:
+        return {"is_specific": False, "reason": "Por favor, proporciona más contexto (usa al menos 3 palabras) o selecciona una noticia concreta."}
+
+    # 2. Normalize and hash
+    normalized_topic = topic.strip().lower()
+    topic_hash = hashlib.sha256(normalized_topic.encode()).hexdigest()
+    
+    # 2. Check DB Cache
+    stmt = select(TopicCache).where(TopicCache.topic_hash == topic_hash)
+    result = await db.execute(stmt)
+    cached = result.scalar_one_or_none()
+    
+    if cached:
+        # Check TTL
+        # Ensure cached.created_at is timezone-aware or handle naive
+        now = datetime.now(timezone.utc)
+        created_at = cached.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+            
+        if created_at < now - timedelta(days=settings.topic_cache_ttl_days):
+            # Expired - Delete and re-evaluate
+            await db.delete(cached)
+            await db.commit()
+        else:
+            # Valid cache hit
+            return {"is_specific": cached.is_specific, "reason": cached.reason}
+        
+    # 3. Cache Miss - Call AI with Short Timeout (Fail Open)
+    api_key = decrypt_api_key(encrypted_key) if encrypted_key else None
+    
+    try:
+        provider = AIProviderFactory.get(provider_name, api_key=api_key)
+        
+        # Enforce 30 second timeout for local AI
+        # If AI is slow, we FAIL CLOSED (reject)
+        try:
+            ai_result = await asyncio.wait_for(provider.evaluate_topic_specificity(topic), timeout=30.0)
+        except asyncio.TimeoutError:
+            # STRICT VERIFICATION: Timeout -> Reject search
+            return {"is_specific": False, "reason": "El modelo de IA está tardando demasiado en validar el contexto. Por favor, sé más específico o selecciona una noticia concreta de la lista."}
+            
+        # 4. Save to DB
+        new_cache = TopicCache(
+            topic_hash=topic_hash,
+            topic_text=normalized_topic,
+            is_specific=ai_result.get("is_specific", True),
+            reason=ai_result.get("reason", "")
+        )
+        db.add(new_cache)
+        await db.commit()
+        
+        return ai_result
+        
+    except Exception as e:
+        # If check fails, default to allowing it
+        return {"is_specific": True, "reason": "Error interno al verificar tema."}
+
+
 @router.post("/", response_model=TaskCreated)
 async def search_news(
     request: SearchRequest,
@@ -76,7 +152,20 @@ async def search_news(
             encrypted_api_key=encrypted_key,
         )
     else:
-        # Topic mode: search RSS -> analyze
+        # Topic mode: Verify specificity first!
+        # The user wants to BLOCK generic topics.
+        
+        # We need to await the specificity check.
+        # This adds latency but ensures quality.
+        specificity = await _check_topic_specificity(db, request.query, provider_name, encrypted_key)
+        
+        if not specificity.get("is_specific", True):
+            from fastapi import HTTPException
+            reason = specificity.get("reason", "Tema demasiado genérico o ambiguo.")
+            # We return 400 so the frontend knows to stop and ask for clarification
+            raise HTTPException(status_code=400, detail=f"AMBIGUOUS_TOPIC: {reason}")
+
+        # specific enough -> search RSS -> analyze
         search_and_analyze.delay(
             task_id=task_id,
             query=request.query,

@@ -309,7 +309,7 @@ def _search_and_analyze_url_sync(
         session.commit()
 
     # ── Step 3: Generate semantic search query via AI ─────────
-    _update_task_progress(task_id, "analyzing", 25)
+    _update_task_progress(task_id, "scraping", 25)
     logger.info("URL Step 3: Generating semantic search query", task_id=task_id)
 
     provider = _get_ai_provider(provider_name, encrypted_api_key)
@@ -318,6 +318,8 @@ def _search_and_analyze_url_sync(
         semantic_query = _run_async(
             provider.generate_search_query(source_article.title, source_article.body)
         )
+        if not semantic_query or not semantic_query.strip():
+            raise ValueError("AI generated an empty semantic query")
     except Exception as e:
         logger.warning("Semantic query generation failed, using title as fallback",
                        task_id=task_id, error=str(e))
@@ -374,6 +376,7 @@ def _search_and_analyze_url_sync(
     # Build article list: source article first, then related
     articles_for_ai = [
         {
+            "role": "MAIN_SOURCE_TO_ANALYZE",
             "source_name": source_article.source_name,
             "title": source_article.title,
             "body": source_article.body[:4000],
@@ -381,6 +384,7 @@ def _search_and_analyze_url_sync(
     ]
     for a in extracted_related:
         articles_for_ai.append({
+            "role": "RELATED_CONTEXT",
             "source_name": a.source_name,
             "title": a.title,
             "body": a.body[:4000],

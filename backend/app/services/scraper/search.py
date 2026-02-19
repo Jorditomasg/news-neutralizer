@@ -39,7 +39,13 @@ async def search_rss_feeds(
     Returns:
         List of SearchHit with URLs and titles.
     """
-    query_lower = query.lower()
+    query_lower = query.strip().lower()
+    
+    # Early escape to avoid returning global top news
+    if not query_lower:
+        logger.warning("Search query is empty, aborting RSS search to prevent top news fallback")
+        return []
+        
     query_terms = query_lower.split()
     hits: list[SearchHit] = []
 

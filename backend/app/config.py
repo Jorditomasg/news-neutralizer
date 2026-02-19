@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     # ── Rate Limiting ─────────────────────────────────────────
     rate_limit_per_minute: int = 30
+    
+    # ── Topic Analysis ────────────────────────────────────────
+    topic_cache_ttl_days: int = 60
 
     # ── Ollama ────────────────────────────────────────────────
     ollama_url: str = "http://ollama:11434"
