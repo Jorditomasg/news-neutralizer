@@ -133,29 +133,51 @@ def _search_and_analyze_sync(
     provider_name: str, encrypted_api_key: str | None
 ):
     """Synchronous implementation of the topic-based pipeline."""
-    from app.services.scraper.search import search_rss_feeds, extract_articles_from_hits
+    from app.services.scraper.extractor import ArticleExtractor
+    from app.services.scraper.search_federated import FederatedSearchEngine
+    from app.services.ai.clustering import SemanticClusterer
+    from app.services.scraper.domain_filter import DomainFilter
+
+    extractor = ArticleExtractor()
+    federator = FederatedSearchEngine()
+    clusterer = SemanticClusterer(similarity_threshold=0.85)
+    domain_filter = DomainFilter(min_trust_score=40)
 
     # ── Step 1: Search RSS feeds ──────────────────────────────
-    # ── Step 1: Search RSS feeds ──────────────────────────────
-    _update_task_progress(task_id, "scraping", 5, "Buscando noticias en Google News y RSS...")
-    logger.info("Step 1: Searching RSS feeds", task_id=task_id, query=query)
+    _update_task_progress(task_id, "scraping", 5, "Buscando noticias en modo federado (Global)...")
+    logger.info("Step 1: Searching Federated Sources", task_id=task_id, query=query)
 
-    hits = _run_async(search_rss_feeds(query, source_slugs, max_per_source=3))
+    hits = _run_async(federator.search(query, max_results_per_provider=20))
 
     if not hits:
-        _update_task_progress(task_id, "failed", 10, "No se encontraron artículos relevantes")
+        _update_task_progress(task_id, "failed", 10, "No se encontraron artículos relevantes en ninguna fuente")
+        return
+        
+    # Domain Trust Filtering
+    # Remove articles from known low-trust domains before clustering
+    hits = domain_filter.filter_untrusted_hits(hits)
+    
+    if not hits:
+        _update_task_progress(task_id, "failed", 10, "Los resultados provenían de fuentes de baja confianza")
         return
 
-    # ── Step 2: Extract article content ───────────────────────
-    logger.info("Step 2: Extracting articles", task_id=task_id, hits=len(hits))
+    # Semantic Clustering Phase for manual queries
+    _update_task_progress(task_id, "scraping", 15, "Agrupando noticias por similitud semántica...")
+    logger.info("Semantic filtering of manual query", found=len(hits))
+
+    # We use DBSCAN to find the densest chunk of related news
+    filtered_hits = clusterer.get_densest_cluster(hits)
     
-    # We use a local extractor to control the loop and report progress
-    from app.services.scraper.extractor import ArticleExtractor
-    extractor = ArticleExtractor()
+    # Take top 8
+    hits_to_process = filtered_hits[:8]
+
+    if not hits_to_process:
+        _update_task_progress(task_id, "failed", 10, "No se pudieron agrupar semánticamente los artículos")
+        return
+
+    # We already have an extractor initialized at the top
     
     extracted = []
-    max_articles = 8
-    hits_to_process = hits[:max_articles]
     total_hits = len(hits_to_process)
     
     for i, hit in enumerate(hits_to_process):
@@ -202,6 +224,12 @@ def _search_and_analyze_sync(
             session.add(db_article)
 
         session.commit()
+
+    # Trigger domain evaluation in the background (fire and forget)
+    urls_to_evaluate = [a.source_url for a in extracted]
+    if urls_to_evaluate:
+        from app.tasks.domain_tasks import discover_and_evaluate_domains
+        discover_and_evaluate_domains.delay(urls_to_evaluate, provider_name, encrypted_api_key)
 
     # ── Step 4: AI Analysis ───────────────────────────────────
     # ── Step 4: AI Analysis ───────────────────────────────────
@@ -266,9 +294,14 @@ def _search_and_analyze_url_sync(
 ):
     """Synchronous implementation of the URL-based pipeline."""
     from app.services.scraper.extractor import ArticleExtractor
-    from app.services.scraper.search import search_rss_feeds, extract_articles_from_hits
+    from app.services.scraper.search_federated import FederatedSearchEngine
+    from app.services.ai.clustering import SemanticClusterer
+    from app.services.scraper.domain_filter import DomainFilter
 
     extractor = ArticleExtractor()
+    federator = FederatedSearchEngine()
+    clusterer = SemanticClusterer(similarity_threshold=0.85)
+    domain_filter = DomainFilter(min_trust_score=40)
 
     # ── Step 1: Extract source article from URL ───────────────
     _update_task_progress(task_id, "scraping", 5)
@@ -330,17 +363,44 @@ def _search_and_analyze_url_sync(
 
     # ── Step 4: Search RSS for related articles ───────────────
     _update_task_progress(task_id, "scraping", 35)
-    logger.info("URL Step 4: Searching related articles", task_id=task_id, query=semantic_query)
+    logger.info("URL Step 4: Searching related articles via Federated Search", task_id=task_id, query=semantic_query)
 
-    hits = _run_async(search_rss_feeds(semantic_query, source_slugs, max_per_source=3))
+    # Use the new federated engine (queries DDG and GNews in parallel)
+    hits = _run_async(federator.search(semantic_query, max_results_per_provider=20))
 
     # Filter out the source URL itself from hits
     hits = [h for h in hits if h.url != url]
+    
+    # Domain Trust Filtering
+    hits = domain_filter.filter_untrusted_hits(hits)
 
     extracted_related = []
     if hits:
+        _update_task_progress(task_id, "scraping", 40)
+        
+        # Semantic Filtering Phase
+        logger.info("Semantic filtering of hits", found=len(hits))
+        filtered_hits = clusterer.filter_by_reference_query(hits, source_article.title)
+        
+        # If clustering reduced it too much, it means the others were noise. 
+        # We take the best 8 to ensure quality over quantity.
+        hits_to_extract = filtered_hits[:8]
+        
+        if not hits_to_extract:
+             logger.warning("No semantically related articles found above threshold", task_id=task_id)
+
         _update_task_progress(task_id, "scraping", 45)
-        extracted_related = _run_async(extract_articles_from_hits(hits, max_articles=6))
+        
+        for hit in hits_to_extract:
+            try:
+                # Extract individual article
+                article = _run_async(extractor.extract(hit.url))
+                article.source_name = hit.source_name
+                extracted_related.append(article)
+            except Exception as e:
+                logger.warning("Failed to extract semantically related article", url=hit.url, error=str(e))
+                continue
+
         logger.info("Related articles extracted", task_id=task_id, count=len(extracted_related))
 
     # ── Step 5: Save related articles to DB ───────────────────
@@ -369,6 +429,11 @@ def _search_and_analyze_url_sync(
         logger.info("Related articles saved", task_id=task_id, count=len(extracted_related))
     else:
         logger.info("No related articles found, will analyze source alone", task_id=task_id)
+
+    # Trigger domain evaluation in the background (fire and forget)
+    urls_to_evaluate = [source_article.source_url] + [a.source_url for a in extracted_related]
+    from app.tasks.domain_tasks import discover_and_evaluate_domains
+    discover_and_evaluate_domains.delay(urls_to_evaluate, provider_name, encrypted_api_key)
 
     # ── Step 6: AI Analysis ───────────────────────────────────
     _update_task_progress(task_id, "analyzing", 65)

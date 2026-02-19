@@ -24,6 +24,10 @@ RUN addgroup --system app && adduser --system --ingroup app app
 
 WORKDIR /app
 
+# Create cache directory for ML models and assign ownership to app user
+RUN mkdir -p /app/.cache && chown -R app:app /app/.cache
+ENV HF_HOME=/app/.cache/huggingface
+
 # Copy installed packages
 COPY --from=builder /install /usr/local
 

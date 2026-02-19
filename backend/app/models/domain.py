@@ -114,3 +114,21 @@ class TopicCache(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+class SourceDomain(Base):
+    """
+    Dynamic Trust Score and Bias representation for news domains.
+    Populated on-the-fly when evaluating new sources.
+    """
+
+    __tablename__ = "source_domains"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)  # e.g., "elmundo.es"
+    is_evaluated: Mapped[bool] = mapped_column(Boolean, default=False)
+    trust_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0 to 100
+    bias_lean: Mapped[str | None] = mapped_column(String(50), nullable=True)  # left, center, right, extreme...
+    ai_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)  # Why it got this score
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
