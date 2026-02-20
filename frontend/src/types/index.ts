@@ -107,3 +107,24 @@ export interface AvailableSource {
   type: "rss" | "web";
   enabled: boolean;
 }
+
+// ── History Types ──────────────────────────────────────────────
+
+export interface SearchTaskSummary {
+  task_id: string;
+  status: TaskStatus;
+  query: string | null;
+  source_url: string | null;
+  title: string | null;
+  source_name: string | null;
+  created_at: string;
+  completed_at: string | null;
+  provider_used: string | null;
+}
+
+export interface PaginatedHistory {
+  total: number;
+  page: number;
+  page_size: number;
+  items: SearchTaskSummary[];
+}

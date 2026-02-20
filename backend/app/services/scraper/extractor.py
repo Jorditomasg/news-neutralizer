@@ -37,21 +37,29 @@ class ArticleExtractor:
         """Fetch a URL and extract the article content."""
         logger.info("Extracting article", url=url)
 
+        from app.services.scraper.resolvers.redirect_resolver import RedirectResolver
+        resolver = RedirectResolver()
+        resolved_url = await resolver.resolve(url)
+
         async with httpx.AsyncClient(
             timeout=30.0,
             follow_redirects=True,
             headers={"User-Agent": self.USER_AGENT},
         ) as client:
-            response = await client.get(url)
+            response = await client.get(resolved_url)
             response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "lxml")
 
+        body = self._extract_body(soup)
+        if not body:
+            raise ValueError(f"No se pudo extraer el contenido del artículo de: {resolved_url}")
+
         return ExtractedArticle(
             title=self._extract_title(soup),
-            body=self._extract_body(soup),
-            source_name=self._extract_source_name(url),
-            source_url=url,
+            body=body,
+            source_name=self._extract_source_name(resolved_url),
+            source_url=resolved_url,
             author=self._extract_author(soup),
             published_at=self._extract_date(soup),
             topics=self._extract_topics(soup),
@@ -73,7 +81,7 @@ class ArticleExtractor:
         title_tag = soup.find("title")
         return title_tag.get_text(strip=True) if title_tag else "Sin título"
 
-    def _extract_body(self, soup: BeautifulSoup) -> str:
+    def _extract_body(self, soup: BeautifulSoup) -> str | None:
         """Extract article body text from common patterns."""
         # Remove unwanted elements
         for tag in soup.find_all(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
@@ -103,7 +111,7 @@ class ArticleExtractor:
         # Fallback: all <p> tags
         paragraphs = soup.find_all("p")
         text = "\n\n".join(p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30)
-        return text if text else "No se pudo extraer el contenido del artículo."
+        return text if text else None
 
     def _extract_author(self, soup: BeautifulSoup) -> str | None:
         """Extract author from meta tags or common patterns."""

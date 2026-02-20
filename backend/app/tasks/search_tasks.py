@@ -102,6 +102,52 @@ def _save_analysis(task_id: str, analysis, provider_name: str, extracted_article
             session.execute(stmt)
 
         session.commit()
+        return analysis_result
+
+
+def _copy_cached_result_to_task(session: Session, new_task_id: str, cached_result: AnalysisResult):
+    """Deep-copy a cached analysis and its articles to a new SearchTask."""
+    stmt = select(SearchTask).where(SearchTask.task_id == new_task_id)
+    new_task = session.execute(stmt).scalar_one()
+    
+    # Get original articles
+    orig_stmt = select(Article).where(Article.search_task_id == cached_result.search_task_id)
+    orig_articles = session.execute(orig_stmt).scalars().all()
+    
+    for a in orig_articles:
+        new_article = Article(
+            search_task_id=new_task.id,
+            source_name=a.source_name,
+            source_url=a.source_url,
+            title=a.title,
+            body=a.body,
+            author=a.author,
+            published_at=a.published_at,
+            is_source=a.is_source,
+            bias_score=a.bias_score,
+            bias_details=a.bias_details,
+            cluster_id=a.cluster_id,
+            trust_score=a.trust_score,
+            similarity_score=a.similarity_score
+        )
+        session.add(new_article)
+        
+    analysis_copy = AnalysisResult(
+        search_task_id=new_task.id,
+        topic_summary=cached_result.topic_summary,
+        objective_facts=cached_result.objective_facts,
+        bias_elements=cached_result.bias_elements,
+        neutralized_summary=cached_result.neutralized_summary,
+        source_bias_scores=cached_result.source_bias_scores,
+        provider_used=cached_result.provider_used,
+        model_used=cached_result.model_used,
+        processing_time_ms=0,
+        filtered_articles_count=cached_result.filtered_articles_count,
+        avg_similarity_score=cached_result.avg_similarity_score,
+        tokens_used=0,
+    )
+    session.add(analysis_copy)
+    session.commit()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -137,6 +183,19 @@ def _search_and_analyze_sync(
     from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.ai.clustering import SemanticClusterer
     from app.services.scraper.domain_filter import DomainFilter
+    from app.services.cache_manager import SyncCacheManager
+    from app.services.scraper.extractor import ExtractedArticle
+    from urllib.parse import urlparse
+
+    # ── Check Query Cache first ───────────────────────────────
+    with SyncSessionLocal() as session:
+        cache_manager = SyncCacheManager(session)
+        cached_result = cache_manager.get_cached_query(query)
+        if cached_result:
+            logger.info("Using cached query result", task_id=task_id, query=query)
+            _copy_cached_result_to_task(session, task_id, cached_result)
+            _update_task_progress(task_id, "completed", 100)
+            return
 
     extractor = ArticleExtractor()
     federator = FederatedSearchEngine()
@@ -185,9 +244,33 @@ def _search_and_analyze_sync(
             progress_pct = 20 + int((i / total_hits) * 30) # 20% to 50%
             _update_task_progress(task_id, "scraping", progress_pct, f"Extrayendo noticia {i+1} de {total_hits}: {hit.source_name}...")
             
-            # extract individual article
-            article = _run_async(extractor.extract(hit.url))
-            article.source_name = hit.source_name # Ensure source name is preserved
+            with SyncSessionLocal() as session:
+                cache_manager = SyncCacheManager(session)
+                cached = cache_manager.get_cached_article(hit.url)
+                if cached:
+                    logger.info("Using cached article", url=hit.url)
+                    article = ExtractedArticle(
+                        title=cached.title,
+                        body=cached.body,
+                        source_name=hit.source_name,
+                        source_url=hit.url,
+                        published_at=cached.published_at
+                    )
+                else:
+                    # extract individual article
+                    article = _run_async(extractor.extract(hit.url))
+                    article.source_name = hit.source_name # Ensure source name is preserved
+                    
+                    domain = urlparse(article.source_url).netloc
+                    cache_manager.set_cached_article(
+                        url=hit.url,
+                        canonical_url=article.source_url,
+                        domain=domain,
+                        title=article.title,
+                        body=article.body,
+                        published_at=article.published_at
+                    )
+                    
             extracted.append(article)
             
         except Exception as e:
@@ -258,7 +341,11 @@ def _search_and_analyze_sync(
     _update_task_progress(task_id, "analyzing", 85)
 
     # ── Step 5: Save analysis ─────────────────────────────────
-    _save_analysis(task_id, analysis, provider_name, extracted)
+    analysis_result = _save_analysis(task_id, analysis, provider_name, extracted)
+    
+    with SyncSessionLocal() as session:
+        cache_manager = SyncCacheManager(session)
+        cache_manager.set_cached_query(query, analysis_result.id)
 
     _update_task_progress(task_id, "completed", 100)
     logger.info("Pipeline complete", task_id=task_id)
@@ -297,6 +384,9 @@ def _search_and_analyze_url_sync(
     from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.ai.clustering import SemanticClusterer
     from app.services.scraper.domain_filter import DomainFilter
+    from app.services.cache_manager import SyncCacheManager
+    from app.services.scraper.extractor import ExtractedArticle
+    from urllib.parse import urlparse
 
     extractor = ArticleExtractor()
     federator = FederatedSearchEngine()
@@ -308,7 +398,29 @@ def _search_and_analyze_url_sync(
     logger.info("URL Step 1: Extracting source article", task_id=task_id, url=url)
 
     try:
-        source_article = _run_async(extractor.extract(url))
+        with SyncSessionLocal() as session:
+            cache_manager = SyncCacheManager(session)
+            cached = cache_manager.get_cached_article(url)
+            if cached:
+                logger.info("Using cached source article", url=url)
+                source_article = ExtractedArticle(
+                    title=cached.title,
+                    body=cached.body,
+                    source_name=cached.domain,
+                    source_url=url,
+                    published_at=cached.published_at
+                )
+            else:
+                source_article = _run_async(extractor.extract(url))
+                domain = urlparse(source_article.source_url).netloc
+                cache_manager.set_cached_article(
+                    url=url,
+                    canonical_url=source_article.source_url,
+                    domain=domain,
+                    title=source_article.title,
+                    body=source_article.body,
+                    published_at=source_article.published_at
+                )
     except Exception as e:
         error_msg = f"No se pudo extraer el artículo de la URL: {str(e)[:300]}"
         logger.error("Source article extraction failed", task_id=task_id, error=str(e))
@@ -393,9 +505,32 @@ def _search_and_analyze_url_sync(
         
         for hit in hits_to_extract:
             try:
-                # Extract individual article
-                article = _run_async(extractor.extract(hit.url))
-                article.source_name = hit.source_name
+                with SyncSessionLocal() as session:
+                    cache_manager = SyncCacheManager(session)
+                    cached = cache_manager.get_cached_article(hit.url)
+                    
+                    if cached:
+                        article = ExtractedArticle(
+                            title=cached.title,
+                            body=cached.body,
+                            source_name=hit.source_name,
+                            source_url=hit.url,
+                            published_at=cached.published_at
+                        )
+                    else:
+                        # Extract individual article
+                        article = _run_async(extractor.extract(hit.url))
+                        article.source_name = hit.source_name
+                        
+                        domain = urlparse(article.source_url).netloc
+                        cache_manager.set_cached_article(
+                            url=hit.url,
+                            canonical_url=article.source_url,
+                            domain=domain,
+                            title=article.title,
+                            body=article.body,
+                            published_at=article.published_at
+                        )
                 extracted_related.append(article)
             except Exception as e:
                 logger.warning("Failed to extract semantically related article", url=hit.url, error=str(e))

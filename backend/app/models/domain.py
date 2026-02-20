@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Enum,
     Float,
     ForeignKey,
     Integer,
@@ -72,6 +73,8 @@ class Article(Base):
     is_source: Mapped[bool] = mapped_column(Boolean, default=False)  # True if this is the user's submitted article
     bias_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0 (neutral) to 1.0 (very biased)
     bias_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # Detailed bias breakdown
+    trust_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Trust score of the domain at the time of analysis
+    similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # Similarity to the query or centroid
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
@@ -91,6 +94,10 @@ class AnalysisResult(Base):
     neutralized_summary: Mapped[str] = mapped_column(Text, nullable=False)
     source_bias_scores: Mapped[dict] = mapped_column(JSONB, nullable=False)  # Per-source bias metrics
     provider_used: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    processing_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    filtered_articles_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    avg_similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -131,4 +138,51 @@ class SourceDomain(Base):
     ai_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)  # Why it got this score
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ArticleCache(Base):
+    """
+    Cache for individual article extraction results.
+    Prevents re-scraping and re-extracting the same URL if it hasn't expired.
+    """
+    __tablename__ = "article_cache"
+
+    url_hash: Mapped[str] = mapped_column(String(64), primary_key=True)  # SHA256 of the URL
+    url_canonical: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Storing serialized vector as JSONB or Text if pgvector is not installed. We use JSONB for simplicity since it's just an array of floats
+    embedding_vector: Mapped[list | None] = mapped_column(JSONB, nullable=True) 
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class QueryCache(Base):
+    """
+    Cache for full query and analysis results.
+    Prevents running the entire LLM pipeline for the exact same query in a short period.
+    """
+    __tablename__ = "query_cache"
+
+    query_hash: Mapped[str] = mapped_column(String(64), primary_key=True)  # SHA256 of normalized query
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_result_id: Mapped[int | None] = mapped_column(ForeignKey("analysis_results.id", ondelete="SET NULL"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Feedback(Base):
+    """
+    User feedback (like/dislike) on analysis results or individual articles.
+    """
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # 'analysis', 'article', 'domain'
+    target_id: Mapped[int | str] = mapped_column(String(255), nullable=False, index=True) # ID of target (can be int cast to string or string domain)
+    vote: Mapped[str] = mapped_column(String(10), nullable=False)  # 'like', 'dislike', 'neutral'
+    session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

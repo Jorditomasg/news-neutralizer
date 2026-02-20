@@ -118,6 +118,29 @@ class SearchTaskOut(BaseModel):
     analysis: AnalysisResultOut | None = None
 
 
+class SearchTaskSummaryOut(BaseModel):
+    """Lighter version of SearchTaskOut for lists."""
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    status: str
+    query: str | None
+    source_url: str | None
+    title: str | None = None
+    source_name: str | None = None
+    created_at: datetime
+    completed_at: datetime | None
+    provider_used: str | None = None
+
+
+class PaginatedHistoryOut(BaseModel):
+    """Paginated list of search tasks."""
+    total: int
+    page: int
+    page_size: int
+    items: list[SearchTaskSummaryOut]
+
+
 class TaskCreated(BaseModel):
     """Response when a new search task is created."""
     task_id: str
@@ -138,3 +161,10 @@ class AvailableSource(BaseModel):
     country: str
     type: str  # rss, web
     enabled: bool = True
+
+
+class FeedbackCreate(BaseModel):
+    """Payload for submitting user feedback."""
+    target_type: str = Field(..., pattern=r"^(analysis|article|domain)$", description="What is being rated")
+    target_id: str = Field(..., description="ID of the target (can be str or int casted to str)")
+    vote: str = Field(..., pattern=r"^(like|dislike|neutral)$", description="Type of vote")

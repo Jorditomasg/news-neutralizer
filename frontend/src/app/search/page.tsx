@@ -5,14 +5,16 @@ import { useSearchParams } from "next/navigation";
 import type { SearchTask, ArticlePreview } from "@/types";
 import { SearchProgress } from "@/components/search/SearchProgress";
 import { SearchForm } from "@/components/search/SearchForm";
+import { FeedbackButtons } from "@/components/feedback/FeedbackButtons";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 function SearchContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [status, setStatus] = useState<string>("idle");
+  const initialTaskId = searchParams.get("taskId");
+  const [taskId, setTaskId] = useState<string | null>(initialTaskId);
+  const [status, setStatus] = useState<string>(initialTaskId ? "pending" : "idle");
   const [progress, setProgress] = useState(0);
   const [displayProgress, setDisplayProgress] = useState(0);
   const [message, setMessage] = useState("");
@@ -199,11 +201,22 @@ function SearchContent() {
         const data = await res.json();
         setTask(data);
         setStatus(data.status);
+        if (data.status === "completed") {
+            setProgress(100);
+            setDisplayProgress(100);
+        }
       }
     } catch (e) {
       console.error("Failed to fetch results", e);
     }
   };
+
+  // If initialTaskId is present, fetch immediately in case WS fails
+  useEffect(() => {
+      if (initialTaskId) {
+          fetchResults(initialTaskId);
+      }
+  }, [initialTaskId]);
 
   const pollResults = async (id: string) => {
     const interval = setInterval(async () => {
@@ -333,7 +346,7 @@ function SearchContent() {
             </div>
           ) : (
             <p className="mt-2 text-gray-400 pl-[1.4rem]">
-              Tema: <span className="text-teal-400 font-medium">&quot;{query}&quot;</span>
+              Tema: <span className="text-teal-400 font-medium">&quot;{task?.query || task?.source_url || query}&quot;</span>
             </p>
           )}
         </div>
@@ -552,6 +565,10 @@ function SearchContent() {
                     );
                   })()}
                 </div>
+                {/* Feedback Widget for the Overall Analysis */}
+                <div className="border-t border-white/10 px-6 py-4 bg-white/[0.01] flex justify-end">
+                  <FeedbackButtons targetType="analysis" targetId={task.task_id} />
+                </div>
               </div>
 
               {task.analysis.objective_facts.length > 0 && (
@@ -657,13 +674,16 @@ function SearchContent() {
                                 <span className="text-base">{getDirectionIcon(scores.direction)}</span>
                                 <span className="font-medium text-white">{source}</span>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className={`rounded-lg px-2 py-0.5 text-xs font-medium capitalize ${color.bg} ${color.text}`}>
-                                  {scores.direction}
-                                </span>
-                                <span className={`font-mono text-sm font-bold ${color.text}`}>
-                                  {(scores.score * 100).toFixed(0)}%
-                                </span>
+                              <div className="flex items-center gap-3">
+                                <FeedbackButtons targetType="domain" targetId={source} compact />
+                                <div className="flex items-center gap-2">
+                                  <span className={`rounded-lg px-2 py-0.5 text-xs font-medium capitalize ${color.bg} ${color.text}`}>
+                                    {scores.direction}
+                                  </span>
+                                  <span className={`font-mono text-sm font-bold ${color.text}`}>
+                                    {(scores.score * 100).toFixed(0)}%
+                                  </span>
+                                </div>
                               </div>
                             </div>
                             <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
@@ -736,6 +756,7 @@ function SearchContent() {
                             {(article.bias_score * 100).toFixed(0)}%
                           </div>
                         )}
+                        <FeedbackButtons targetType="article" targetId={article.id} compact />
                         <svg className="w-4 h-4 text-gray-500 group-hover:text-teal-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                         </svg>
