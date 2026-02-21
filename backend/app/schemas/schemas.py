@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 class SearchRequest(BaseModel):
     """Search for news by topic."""
-    query: str = Field(..., min_length=3, max_length=500, description="Search topic or keywords")
+    query: str = Field(..., min_length=3, max_length=3000, description="Search topic, keywords, or article URL")
     original_query: str | None = Field(None, description="Original search terms when querying from a headline")
     sources: list[str] | None = Field(None, description="Specific sources to search (None = all)")
 
