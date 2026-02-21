@@ -43,18 +43,19 @@ async def task_progress(websocket: WebSocket, task_id: str):
                     })
                     break
 
-                # Use specific message from DB if available (stored in error_message col for now)
-                # unless it's a real error (status=failed)
-                db_msg = task.error_message
+                # Use specific progress message from DB if available
+                db_msg = task.progress_message
                 if db_msg and task.status != "failed":
                     message = db_msg
                 else:
-                    message = _status_message(task.status, task.progress)
+                    message = task.error_message if task.status == "failed" and task.error_message else _status_message(task.status, task.progress)
 
                 await websocket.send_json({
-                    "task_id": task_id,
+                    "task_id": task.task_id,
                     "status": task.status,
                     "progress": task.progress,
+                    "progress_message": task.progress_message,
+                    "error_message": task.error_message,
                     "message": message,
                 })
 

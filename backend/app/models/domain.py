@@ -2,6 +2,8 @@
 
 from datetime import datetime
 
+import enum
+
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -15,8 +17,15 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 from app.models.base import Base
+
+class ArticleStatus(str, enum.Enum):
+    DETECTED = "DETECTED"
+    ANALYZING = "ANALYZING"
+    ANALYZED = "ANALYZED"
+    CONTEXTUALIZED = "CONTEXTUALIZED"
 
 
 class UserAPIKey(Base):
@@ -47,6 +56,7 @@ class SearchTask(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # Direct URL input
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, scraping, analyzing, completed, failed
     progress: Mapped[int] = mapped_column(Integer, default=0)  # 0-100
+    progress_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -75,10 +85,14 @@ class Article(Base):
     bias_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # Detailed bias breakdown
     trust_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Trust score of the domain at the time of analysis
     similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # Similarity to the query or centroid
+    status: Mapped[ArticleStatus] = mapped_column(Enum(ArticleStatus, native_enum=False, length=20), default=ArticleStatus.DETECTED)
+    structural_reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     search_task: Mapped["SearchTask"] = relationship(back_populates="articles")
+    structured_facts: Mapped[list["StructuredFact"]] = relationship(back_populates="article", cascade="all, delete-orphan")
 
 
 class AnalysisResult(Base):
@@ -186,3 +200,51 @@ class Feedback(Base):
     session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+class StructuredFact(Base):
+    """An atomic extracted fact or assertion from an article."""
+    
+    __tablename__ = "structured_facts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False) # FACT, UNVERIFIED_CLAIM, BIAS, FRAMING, OMISSION, TONE
+    entities: Mapped[list] = mapped_column(JSONB, default=list)
+    embedding: Mapped[list | None] = mapped_column(Vector(384), nullable=True) # Assuming all-MiniLM-L6-v2 size mapping
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    article: Mapped["Article"] = relationship(back_populates="structured_facts")
+
+
+class GeneratedNews(Base):
+    """The final synthethized impartial news based exclusively on established facts."""
+    
+    __tablename__ = "generated_news"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    lead: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    context_articles_ids: Mapped[list] = mapped_column(JSONB, nullable=False) # List of integer ids of articles
+    reliability_score_achieved: Mapped[float | None] = mapped_column(Float, nullable=True)
+    has_new_context_available: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationships
+    traces: Mapped[list["FactTraceability"]] = relationship(back_populates="generated_news", cascade="all, delete-orphan")
+
+
+class FactTraceability(Base):
+    """Links paragraphs in GeneratedNews to the core StructuredFacts driving them."""
+    
+    __tablename__ = "fact_traceability"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    generated_news_id: Mapped[int] = mapped_column(ForeignKey("generated_news.id", ondelete="CASCADE"), nullable=False, index=True)
+    structured_fact_id: Mapped[int] = mapped_column(ForeignKey("structured_facts.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    generated_news: Mapped["GeneratedNews"] = relationship(back_populates="traces")
+    structured_fact: Mapped["StructuredFact"] = relationship()

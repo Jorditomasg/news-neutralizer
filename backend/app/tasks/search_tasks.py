@@ -41,18 +41,23 @@ def _run_async(coro):
         loop.close()
 
 
-def _update_task_progress(task_id: str, status: str, progress: int, error_message: str | None = None):
+def _update_task_progress(task_id: str, status: str, progress: int, error_message: str | None = None, progress_message: str | None = None):
     """Update task status and progress in the database (sync)."""
     with SyncSessionLocal() as session:
+        values_dict = {
+            "status": status,
+            "progress": progress,
+            "completed_at": datetime.now(timezone.utc) if status in ("completed", "failed") else None,
+        }
+        if error_message is not None:
+            values_dict["error_message"] = error_message
+        if progress_message is not None:
+            values_dict["progress_message"] = progress_message
+
         stmt = (
             update(SearchTask)
             .where(SearchTask.task_id == task_id)
-            .values(
-                status=status,
-                progress=progress,
-                error_message=error_message,
-                completed_at=datetime.now(timezone.utc) if status in ("completed", "failed") else None,
-            )
+            .values(**values_dict)
         )
         session.execute(stmt)
         session.commit()
@@ -281,6 +286,19 @@ def _search_and_analyze_sync(
         _update_task_progress(task_id, "failed", 50, "No se pudo extraer contenido de los artículos")
         return
 
+    # ── Post-extraction dedup by canonical URL ────────────────
+    from app.services.scraper.url_utils import normalize_url
+    seen_canonical = set()
+    deduped = []
+    for article in extracted:
+        canonical = normalize_url(article.source_url)
+        if canonical not in seen_canonical:
+            seen_canonical.add(canonical)
+            deduped.append(article)
+        else:
+            logger.info("Post-extraction duplicate removed", url=article.source_url[:80])
+    extracted = deduped
+
     # ── Step 3: Save articles to DB (sync) ────────────────────
     logger.info("Step 3: Saving articles", task_id=task_id, count=len(extracted))
 
@@ -356,7 +374,7 @@ def _search_and_analyze_sync(
 # ══════════════════════════════════════════════════════════════
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
-def search_and_analyze_url(self, task_id: str, url: str, source_slugs: list | None = None,
+def search_and_analyze_url(self, task_id: str, url: str, original_query: str | None = None, source_slugs: list | None = None,
                            provider_name: str = "openai", encrypted_api_key: str | None = None):
     """
     URL pipeline: extract source article → semantic query → search related → analyze.
@@ -364,7 +382,7 @@ def search_and_analyze_url(self, task_id: str, url: str, source_slugs: list | No
     """
     try:
         _search_and_analyze_url_sync(
-            task_id, url, source_slugs, provider_name, encrypted_api_key
+            task_id, url, original_query, source_slugs, provider_name, encrypted_api_key
         )
     except Exception as exc:
         logger.error("URL task failed", task_id=task_id, error=str(exc))
@@ -376,29 +394,28 @@ def search_and_analyze_url(self, task_id: str, url: str, source_slugs: list | No
 
 
 def _search_and_analyze_url_sync(
-    task_id: str, url: str, source_slugs: list | None,
+    task_id: str, url: str, original_query: str | None, source_slugs: list | None,
     provider_name: str, encrypted_api_key: str | None
 ):
-    """Synchronous implementation of the URL-based pipeline."""
+    """Synchronous implementation of the URL-based pipeline (Fact-Based Analysis)."""
     from app.services.scraper.extractor import ArticleExtractor
-    from app.services.scraper.search_federated import FederatedSearchEngine
-    from app.services.ai.clustering import SemanticClusterer
-    from app.services.scraper.domain_filter import DomainFilter
     from app.services.cache_manager import SyncCacheManager
     from app.services.scraper.extractor import ExtractedArticle
+    from app.models.domain import Article, ArticleStatus, StructuredFact, AnalysisResult
+    from app.core.chunking import segment_text_into_chunks
     from urllib.parse import urlparse
 
     extractor = ArticleExtractor()
-    federator = FederatedSearchEngine()
-    clusterer = SemanticClusterer(similarity_threshold=0.85)
-    domain_filter = DomainFilter(min_trust_score=40)
+    provider = _get_ai_provider(provider_name, encrypted_api_key)
 
     # ── Step 1: Extract source article from URL ───────────────
-    _update_task_progress(task_id, "scraping", 5)
+    _update_task_progress(task_id, "scraping", 0, progress_message="Descargando contenido del artículo...")
     logger.info("URL Step 1: Extracting source article", task_id=task_id, url=url)
 
     try:
         with SyncSessionLocal() as session:
+            # Fast-track check conceptually happens before/during Extraction phase
+            # For now, we still extract to ensure we have content if not cached
             cache_manager = SyncCacheManager(session)
             cached = cache_manager.get_cached_article(url)
             if cached:
@@ -427,20 +444,21 @@ def _search_and_analyze_url_sync(
         _update_task_progress(task_id, "failed", 5, error_msg)
         return
 
-    logger.info("Source article extracted",
-                task_id=task_id,
-                title=source_article.title[:80],
-                source=source_article.source_name)
+    # ── Step 2: Chunking ──────────────────────────────────────
+    _update_task_progress(task_id, "analyzing", 10, progress_message="Segmentando artículo en bloques semánticos...")
+    chunks = segment_text_into_chunks(source_article.body, max_tokens=1500)
+    total_chunks = len(chunks)
 
-    # ── Step 2: Save source article to DB ─────────────────────
-    _update_task_progress(task_id, "scraping", 15)
-
+    # ── Step 3: Save initial Article to database ─────────────
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
-        result = session.execute(stmt)
-        search_task = result.scalar_one()
+        search_task = session.execute(stmt).scalar_one()
 
-        db_source = Article(
+        # Update SearchTask with the resolved (canonical) URL and article title
+        search_task.source_url = source_article.source_url
+        search_task.query = source_article.title
+
+        db_article = Article(
             search_task_id=search_task.id,
             source_name=source_article.source_name,
             source_url=source_article.source_url,
@@ -449,164 +467,110 @@ def _search_and_analyze_url_sync(
             author=source_article.author[:200] if source_article.author else None,
             published_at=source_article.published_at,
             is_source=True,
+            status=ArticleStatus.ANALYZING
         )
-        session.add(db_source)
+        session.add(db_article)
+        session.flush()
+        article_id = db_article.id
         session.commit()
 
-    # ── Step 3: Generate semantic search query via AI ─────────
-    _update_task_progress(task_id, "scraping", 25)
-    logger.info("URL Step 3: Generating semantic search query", task_id=task_id)
-
-    provider = _get_ai_provider(provider_name, encrypted_api_key)
-
-    try:
-        semantic_query = _run_async(
-            provider.generate_search_query(source_article.title, source_article.body)
-        )
-        if not semantic_query or not semantic_query.strip():
-            raise ValueError("AI generated an empty semantic query")
-    except Exception as e:
-        logger.warning("Semantic query generation failed, using title as fallback",
-                       task_id=task_id, error=str(e))
-        # Fallback: use the first 8 words of the title
-        semantic_query = " ".join(source_article.title.split()[:8])
-
-    logger.info("Semantic query generated", task_id=task_id, query=semantic_query)
-
-    # ── Step 4: Search RSS for related articles ───────────────
-    _update_task_progress(task_id, "scraping", 35)
-    logger.info("URL Step 4: Searching related articles via Federated Search", task_id=task_id, query=semantic_query)
-
-    # Use the new federated engine (queries DDG and GNews in parallel)
-    hits = _run_async(federator.search(semantic_query, max_results_per_provider=20))
-
-    # Filter out the source URL itself from hits
-    hits = [h for h in hits if h.url != url]
+    # ── Step 4: Process Chunks ────────────────────────────────
+    extracted_facts_all = []
     
-    # Domain Trust Filtering
-    hits = domain_filter.filter_untrusted_hits(hits)
+    for i, chunk in enumerate(chunks, 1):
+        msg = f"Procesando bloque {i} de {total_chunks}..."
+        progress_pct = 10 + int((i / total_chunks) * 75)
+        _update_task_progress(task_id, "analyzing", progress_pct, progress_message=msg)
+        logger.info(msg, task_id=task_id)
 
-    extracted_related = []
-    if hits:
-        _update_task_progress(task_id, "scraping", 40)
-        
-        # Semantic Filtering Phase
-        logger.info("Semantic filtering of hits", found=len(hits))
-        filtered_hits = clusterer.filter_by_reference_query(hits, source_article.title)
-        
-        # If clustering reduced it too much, it means the others were noise. 
-        # We take the best 8 to ensure quality over quantity.
-        hits_to_extract = filtered_hits[:8]
-        
-        if not hits_to_extract:
-             logger.warning("No semantically related articles found above threshold", task_id=task_id)
+        try:
+            chunk_result = _run_async(provider.extract_facts_from_chunk(chunk))
+            
+            with SyncSessionLocal() as session:
+                for fact in chunk_result.facts:
+                    session.add(StructuredFact(article_id=article_id, content=fact, type="FACT", chunk_index=i))
+                for claim in chunk_result.unverified_claims:
+                    session.add(StructuredFact(article_id=article_id, content=claim, type="UNVERIFIED_CLAIM", chunk_index=i))
+                for bias in chunk_result.biases:
+                    session.add(StructuredFact(article_id=article_id, content=f"{bias.get('type')}: {bias.get('quote')} - {bias.get('explanation')}", type="BIAS", chunk_index=i))
+                for frame in chunk_result.framing:
+                    session.add(StructuredFact(article_id=article_id, content=frame, type="FRAMING", chunk_index=i))
+                
+                # We could add entities and tone as facts, but entities array is in the model
+                if chunk_result.entities:
+                    session.add(StructuredFact(article_id=article_id, content="Entidades detectadas", type="ENTITIES", entities=chunk_result.entities, chunk_index=i))
+                if chunk_result.tone:
+                    session.add(StructuredFact(article_id=article_id, content=chunk_result.tone, type="TONE", chunk_index=i))
 
-        _update_task_progress(task_id, "scraping", 45)
-        
-        for hit in hits_to_extract:
-            try:
-                with SyncSessionLocal() as session:
-                    cache_manager = SyncCacheManager(session)
-                    cached = cache_manager.get_cached_article(hit.url)
-                    
-                    if cached:
-                        article = ExtractedArticle(
-                            title=cached.title,
-                            body=cached.body,
-                            source_name=hit.source_name,
-                            source_url=hit.url,
-                            published_at=cached.published_at
-                        )
-                    else:
-                        # Extract individual article
-                        article = _run_async(extractor.extract(hit.url))
-                        article.source_name = hit.source_name
-                        
-                        domain = urlparse(article.source_url).netloc
-                        cache_manager.set_cached_article(
-                            url=hit.url,
-                            canonical_url=article.source_url,
-                            domain=domain,
-                            title=article.title,
-                            body=article.body,
-                            published_at=article.published_at
-                        )
-                extracted_related.append(article)
-            except Exception as e:
-                logger.warning("Failed to extract semantically related article", url=hit.url, error=str(e))
-                continue
+                session.commit()
+                
+            extracted_facts_all.extend(chunk_result.facts)
+             
+        except Exception as e:
+            logger.error(f"Error extracting chunk {i}", task_id=task_id, error=str(e))
+            # Continue with other chunks
 
-        logger.info("Related articles extracted", task_id=task_id, count=len(extracted_related))
-
-    # ── Step 5: Save related articles to DB ───────────────────
-    if extracted_related:
-        _update_task_progress(task_id, "scraping", 55)
-        with SyncSessionLocal() as session:
-            stmt = select(SearchTask).where(SearchTask.task_id == task_id)
-            result = session.execute(stmt)
-            search_task = result.scalar_one()
-
-            for article in extracted_related:
-                db_article = Article(
-                    search_task_id=search_task.id,
-                    source_name=article.source_name,
-                    source_url=article.source_url,
-                    title=article.title,
-                    body=article.body,
-                    author=article.author[:200] if article.author else None,
-                    published_at=article.published_at,
-                    is_source=False,
-                )
-                session.add(db_article)
-
-            session.commit()
-
-        logger.info("Related articles saved", task_id=task_id, count=len(extracted_related))
-    else:
-        logger.info("No related articles found, will analyze source alone", task_id=task_id)
-
-    # Trigger domain evaluation in the background (fire and forget)
-    urls_to_evaluate = [source_article.source_url] + [a.source_url for a in extracted_related]
-    from app.tasks.domain_tasks import discover_and_evaluate_domains
-    discover_and_evaluate_domains.delay(urls_to_evaluate, provider_name, encrypted_api_key)
-
-    # ── Step 6: AI Analysis ───────────────────────────────────
-    _update_task_progress(task_id, "analyzing", 65)
-
-    # Build article list: source article first, then related
-    articles_for_ai = [
-        {
-            "role": "MAIN_SOURCE_TO_ANALYZE",
-            "source_name": source_article.source_name,
-            "title": source_article.title,
-            "body": source_article.body[:4000],
-        }
-    ]
-    for a in extracted_related:
-        articles_for_ai.append({
-            "role": "RELATED_CONTEXT",
-            "source_name": a.source_name,
-            "title": a.title,
-            "body": a.body[:4000],
-        })
-
+    # ── Step 5: Consolidate & Embeddings ───────────────────────
+    _update_task_progress(task_id, "analyzing", 90, progress_message="Consolidando hechos atómicos extraídos...")
+    
     try:
-        _update_task_progress(task_id, "analyzing", 70)
-        analysis = _run_async(provider.analyze_articles(articles_for_ai))
+        consolidated_facts = _run_async(provider.consolidate_intra_article_facts(extracted_facts_all))
     except Exception as e:
-        error_msg = f"Error en análisis AI ({provider_name}): {str(e)[:500]}"
-        logger.error("AI analysis failed", task_id=task_id, error=str(e))
-        _update_task_progress(task_id, "failed", 70, error_msg)
-        return
+        logger.error("Error deduplicating facts", error=str(e))
+        consolidated_facts = extracted_facts_all
+        
+    from app.services.ai.clustering import generate_embeddings
+    embeddings = generate_embeddings(consolidated_facts)
 
-    _update_task_progress(task_id, "analyzing", 90)
+    # Temporarily create a fake AnalysisResult for backwards compatibility with the frontend
+    with SyncSessionLocal() as session:
+        stmt = select(SearchTask).where(SearchTask.task_id == task_id)
+        search_task = session.execute(stmt).scalar_one()
 
-    # ── Step 7: Save analysis ─────────────────────────────────
-    all_articles = [source_article] + list(extracted_related)
-    _save_analysis(task_id, analysis, provider_name, all_articles)
-
-    _update_task_progress(task_id, "completed", 100)
-    logger.info("URL pipeline complete",
-                task_id=task_id,
-                source_title=source_article.title[:80],
-                related_count=len(extracted_related))
+        article = session.get(Article, article_id)
+        article.status = ArticleStatus.ANALYZED
+        article.analyzed_at = datetime.now(timezone.utc)
+        
+        from sqlalchemy import delete
+        session.execute(delete(StructuredFact).where(StructuredFact.article_id == article_id, StructuredFact.type == "FACT"))
+        
+        for fact, emb in zip(consolidated_facts, embeddings):
+            session.add(StructuredFact(
+                article_id=article_id,
+                content=fact,
+                type="FACT",
+                chunk_index=0,
+                embedding=emb if len(emb) > 0 else None
+            ))
+        
+        # Clear any existing analysis result in case of celery task retry
+        session.execute(delete(AnalysisResult).where(AnalysisResult.search_task_id == search_task.id))
+        
+        # Build fake analysis
+        analysis = AnalysisResult(
+            search_task_id=search_task.id,
+            topic_summary=f"Análisis estructurado de la noticia: {source_article.title[:100]}",
+            objective_facts=consolidated_facts[:10], # Just a sample to show
+            bias_elements=[],
+            neutralized_summary=" ".join(consolidated_facts[:5]) if consolidated_facts else "No se extrajeron hechos.",
+            source_bias_scores={source_article.source_name: {"score": 0.5, "direction": "centro", "confidence": 0.5}},
+            provider_used=provider_name,
+            model_used=provider.name,
+            processing_time_ms=0,
+            filtered_articles_count=0,
+            avg_similarity_score=1.0,
+            tokens_used=0
+        )
+        session.add(analysis)
+        search_task.completed_at = datetime.now(timezone.utc)
+        search_task.status = "completed"
+        search_task.progress = 100
+        session.commit()
+        logger.info(f"Article analysis completed", task_id=task_id, article_id=article_id)
+        
+    # Phase 6: Trigger check for new context availability on existing generated news
+    from app.tasks.generate_tasks import check_new_context_availability
+    check_new_context_availability.delay(article_id)
+        
+    _update_task_progress(task_id, "completed", 100, progress_message="Análisis estructurado completado con éxito.")
+    logger.info("URL pipeline complete", task_id=task_id, source_title=source_article.title[:80])

@@ -124,11 +124,39 @@ class FederatedSearchEngine:
             GoogleNewsRSSProvider()
         ]
         
+    async def _resolve_google_news_urls(self, hits: List[ArticleHit]) -> List[ArticleHit]:
+        """
+        Batch-resolve Google News redirect URLs to their canonical destinations.
+        This must happen BEFORE deduplication so we can detect that a Google News
+        URL and a direct URL point to the same article.
+        """
+        from app.services.scraper.url_utils import is_google_news_url
+        from app.services.scraper.resolvers.redirect_resolver import RedirectResolver
+        
+        resolver = RedirectResolver()
+        resolved_hits = []
+        
+        for hit in hits:
+            if is_google_news_url(hit.url):
+                try:
+                    resolved_url = await resolver.resolve(hit.url)
+                    logger.info("Resolved Google News URL", 
+                               original=hit.url[:80], resolved=resolved_url[:80])
+                    hit.url = resolved_url
+                except Exception as e:
+                    logger.warning("Failed to resolve Google News URL, keeping original",
+                                   url=hit.url[:80], error=str(e))
+            resolved_hits.append(hit)
+            
+        return resolved_hits
+        
     async def search(self, query: str, max_results_per_provider: int = 20) -> List[ArticleHit]:
         """
         Runs all providers concurrently and merges the results.
-        Deduplicates by URL.
+        Resolves Google News redirects, then deduplicates by normalized URL.
         """
+        from app.services.scraper.url_utils import normalize_url
+        
         if not query.strip():
             return []
             
@@ -140,20 +168,30 @@ class FederatedSearchEngine:
         # Run all searches in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        all_hits = []
-        seen_urls = set()
-        
+        # Collect all raw hits
+        raw_hits = []
         for idx, result in enumerate(results):
             if isinstance(result, Exception):
                 provider_name = self.providers[idx].name
                 logger.error("Provider failed in federated search", provider=provider_name, error=str(result))
                 continue
-                
-            # Deduplicate
-            for hit in result:
-                if hit.url not in seen_urls:
-                    seen_urls.add(hit.url)
-                    all_hits.append(hit)
+            raw_hits.extend(result)
+        
+        # Resolve Google News URLs to canonical destinations
+        resolved_hits = await self._resolve_google_news_urls(raw_hits)
+        
+        # Deduplicate by normalized URL (prefers first occurrence — DDG runs before GNews)
+        all_hits = []
+        seen_normalized = set()
+        
+        for hit in resolved_hits:
+            norm = normalize_url(hit.url)
+            if norm not in seen_normalized:
+                seen_normalized.add(norm)
+                all_hits.append(hit)
+            else:
+                logger.info("Duplicate URL removed", url=hit.url[:80], normalized=norm[:80])
                     
-        logger.info("Federated search complete", query=query, total_hits=len(all_hits))
+        logger.info("Federated search complete", query=query, 
+                     total_raw=len(raw_hits), after_dedup=len(all_hits))
         return all_hits

@@ -20,6 +20,16 @@ class AnalysisResult:
     source_bias_scores: dict[str, dict]
     tokens_used: int | None = None
 
+@dataclass
+class ExtractedFactsResult:
+    """Structured facts extracted from a single text chunk."""
+    facts: list[str]
+    unverified_claims: list[str]
+    biases: list[dict]
+    framing: list[str]
+    entities: list[str]
+    tone: str
+
 
 class AIProvider(ABC):
     """
@@ -57,6 +67,80 @@ class AIProvider(ABC):
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Estimate the cost in USD for a given token count."""
         ...
+
+    async def extract_facts_from_chunk(self, chunk: str) -> "ExtractedFactsResult":
+        """Extract structured facts and bias info from a chunk of text."""
+        prompt = (
+            "Analiza el siguiente fragmento de texto periodístico y extrae meticulosamente "
+            "la información requerida en formato JSON estricto. "
+            "Tu análisis debe ser completamente exhaustivo y atómico.\n\n"
+            f"TEXTO:\n{chunk}\n\n"
+            "Responde SOLO con un objeto JSON válido que contenga exactamente estas claves:\n"
+            "{\n"
+            '  "facts": ["Lista de hechos verificables o acciones concretas ocurridas. Cada uno debe ser una afirmación independiente y atómica."],\n'
+            '  "unverified_claims": ["Afirmaciones hechas por el periodista o citas de fuentes que no son hechos consolidados, sino posiciones, opiniones o declaraciones."],\n'
+            '  "biases": [\n'
+            '    {\n'
+            '      "type": "tipo de sesgo (sensacionalismo, adjetivación, victimización, etc.)",\n'
+            '      "quote": "cita textual exacta donde se aprecia",\n'
+            '      "explanation": "breve explicación"\n'
+            '    }\n'
+            '  ],\n'
+            '  "framing": ["Descripción breve de cómo se está enmarcando la noticia en este fragmento (ej. culpabilización, heroísmo, alarma, etc.)."],\n'
+            '  "entities": ["Lista de nombres propios, organizaciones, cargos o lugares mencionados clave."],\n'
+            '  "tone": "Una palabra que defina el tono general (ej. alarmista, neutral, crítico, empático)."\n'
+            "}"
+        )
+        response = await self.analyze(prompt, max_tokens=2000)
+        parsed = self._parse_extracted_facts(response)
+        
+        return ExtractedFactsResult(
+            facts=parsed.get("facts", []),
+            unverified_claims=parsed.get("unverified_claims", []),
+            biases=parsed.get("biases", []),
+            framing=parsed.get("framing", []),
+            entities=parsed.get("entities", []),
+            tone=parsed.get("tone", "desconocido")
+        )
+
+    async def consolidate_intra_article_facts(self, facts: list[str]) -> list[str]:
+        """Deduplicate and consolidate a list of facts from the same article."""
+        if not facts:
+            return []
+            
+        facts_text = "\n".join([f"- {f}" for f in facts])
+        prompt = (
+            "A continuación tienes una lista de hechos extraídos de diferentes fragmentos "
+            "de un mismo artículo periodístico. Tu tarea es eliminar duplicados exactos "
+            "o redundancias, combinando información si es necesario, para producir una "
+            "lista consolidada, atómica y exhaustiva de los hechos.\n\n"
+            f"HECHOS ORIGINALES:\n{facts_text}\n\n"
+            "Responde SOLO con un objeto JSON válido que contenga la clave 'consolidated_facts' "
+            "cuyo valor sea una lista de strings con los hechos consolidados.\n"
+            "Ejemplo de formato de respuesta:\n"
+            "{\n"
+            '  "consolidated_facts": [\n'
+            '    "Hecho 1",\n'
+            '    "Hecho 2"\n'
+            '  ]\n'
+            "}"
+        )
+        response = await self.analyze(prompt, max_tokens=3000)
+        
+        # Parse JSON
+        text = response.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+            
+        try:
+            parsed = json.loads(text)
+            return parsed.get("consolidated_facts", facts)
+        except json.JSONDecodeError:
+            # regex fallback
+            extracted = self._extract_json_array(text, "consolidated_facts")
+            return extracted if extracted else facts
 
     # ── Robust JSON extraction ──────────────────────────────────
 
@@ -263,6 +347,36 @@ class AIProvider(ABC):
         prompt = self._build_analysis_prompt(articles)
         response = await self.analyze(prompt, max_tokens=4096)
         return self._parse_response(response)
+
+    def _parse_extracted_facts(self, response: str) -> dict:
+        """Parse JSON response from the chunk extraction prompt."""
+        text = response.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse extracted facts JSON directly, using regex...", response_preview=text[:200])
+            
+            # regex fallback
+            facts = self._extract_json_array(text, "facts") or []
+            claims = self._extract_json_array(text, "unverified_claims") or []
+            biases = self._extract_json_array(text, "biases") or []
+            framing = self._extract_json_array(text, "framing") or []
+            entities = self._extract_json_array(text, "entities") or []
+            tone = self._extract_json_string_value(text, "tone") or "desconocido"
+            
+            return {
+                "facts": facts,
+                "unverified_claims": claims,
+                "biases": biases,
+                "framing": framing,
+                "entities": entities,
+                "tone": tone
+            }
 
     async def evaluate_topic_specificity(self, topic: str) -> dict:
         """

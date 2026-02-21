@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useRef, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import type { SearchTask, ArticlePreview } from "@/types";
 import { SearchProgress } from "@/components/search/SearchProgress";
 import { SearchForm } from "@/components/search/SearchForm";
 import { FeedbackButtons } from "@/components/feedback/FeedbackButtons";
+import { useTaskContext } from "@/context/TaskContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -13,6 +14,8 @@ function SearchContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
   const initialTaskId = searchParams.get("taskId");
+  const { addTask } = useTaskContext();
+  const router = useRouter();
   const [taskId, setTaskId] = useState<string | null>(initialTaskId);
   const [status, setStatus] = useState<string>(initialTaskId ? "pending" : "idle");
   const [progress, setProgress] = useState(0);
@@ -28,6 +31,8 @@ function SearchContent() {
   const [showHeadlines, setShowHeadlines] = useState(false);
   const [selectedHeadline, setSelectedHeadline] = useState<ArticlePreview | null>(null);
   const [isAmbiguous, setIsAmbiguous] = useState(false);
+  const [failedHeadlineUrls, setFailedHeadlineUrls] = useState<Set<string>>(new Set());
+  const [pendingHeadline, setPendingHeadline] = useState<ArticlePreview | null>(null);
 
   const isUrl = (text: string) => {
     return text.startsWith("http://") || text.startsWith("https://");
@@ -123,6 +128,28 @@ function SearchContent() {
     }
   };
 
+  const _recoverToHeadlines = (failedUrl?: string, errorMsg?: string) => {
+    // If we have headlines to go back to, show them with a warning
+    if (headlines.length > 0) {
+      if (failedUrl) {
+        setFailedHeadlineUrls(prev => new Set(prev).add(failedUrl));
+      }
+      setError(errorMsg || null);
+      setStatus("headlines_selection");
+      setShowHeadlines(true);
+      setTaskId(null);
+      setTask(null);
+      setProgress(0);
+      setDisplayProgress(0);
+      setMessage("");
+      setSelectedHeadline(null);
+    } else {
+      // No headlines to recover to — show error inline
+      setError(errorMsg || "Error durante el procesamiento");
+      setStatus("error");
+    }
+  };
+
   const startSearch = async (searchQuery: string, headline?: ArticlePreview) => {
     try {
       setStatus("starting");
@@ -135,33 +162,43 @@ function SearchContent() {
         setSelectedHeadline(null);
       }
 
+      const payload: any = { query: searchQuery };
+      if (headline && !isUrl(query)) {
+        payload.original_query = query;
+      }
+
       const res = await fetch(`${API_BASE}/api/v1/search/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: searchQuery }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const errorData = await res.json();
         // Check for ambiguous topic error
-        if (res.status === 400 && errorData.detail && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
+        if (res.status === 400 && errorData.detail && typeof errorData.detail === 'string' && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
           const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
           setIsAmbiguous(true);
           setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
-          setStatus("headlines_selection"); // Stay in selection mode
-          setShowHeadlines(true); // Ensure headlines are shown if available
+          setStatus("headlines_selection");
+          setShowHeadlines(true);
           return;
         }
-        throw new Error(errorData.detail || "Failed to start search");
+        // Stringify the error detail safely (fixes [Object Object])
+        const errorDetail = typeof errorData.detail === 'string' 
+          ? errorData.detail 
+          : JSON.stringify(errorData.detail) || "Error desconocido del servidor";
+        throw new Error(errorDetail);
       }
 
       const data = await res.json();
       setTaskId(data.task_id);
+      addTask(data.task_id, headline ? headline.title : query || "Analizando noticia...");
       setStatus("pending");
     } catch (e: any) {
       if (!isAmbiguous) {
-          setError(e.message || "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?");
-          setStatus("error");
+        const errorMsg = typeof e.message === 'string' ? e.message : "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?";
+        _recoverToHeadlines(headline?.source_url, errorMsg);
       }
       hasStarted.current = false;
     }
@@ -178,10 +215,14 @@ function SearchContent() {
       const data = JSON.parse(event.data);
       setStatus(data.status);
       setProgress(data.progress);
-      setMessage(data.message);
+      setMessage(typeof data.message === 'string' ? data.message : '');
 
-      if (data.status === "completed" || data.status === "failed") {
+      if (data.status === "completed") {
         fetchResults(taskId);
+      } else if (data.status === "failed") {
+        const errMsg = typeof data.error_message === 'string' ? data.error_message 
+          : typeof data.message === 'string' ? data.message : "Error durante el análisis";
+        _recoverToHeadlines(selectedHeadline?.source_url, errMsg);
       }
     };
 
@@ -211,10 +252,14 @@ function SearchContent() {
     }
   };
 
-  // If initialTaskId is present, fetch immediately in case WS fails
+  // If initialTaskId is present (reload/navigation), reconnect to the task
   useEffect(() => {
       if (initialTaskId) {
-          fetchResults(initialTaskId);
+          // Fetch current state from API
+          fetchResults(initialTaskId).then(() => {
+            // Re-register in TaskContext so GlobalTaskTracker reconnects WebSocket
+            addTask(initialTaskId, query || "Analizando noticia...");
+          });
       }
   }, [initialTaskId]);
 
@@ -226,9 +271,16 @@ function SearchContent() {
           const data = await res.json();
           setStatus(data.status);
           setProgress(data.progress);
-          if (data.status === "completed" || data.status === "failed") {
+          if (data.progress_message || data.error_message) {
+              setMessage(data.progress_message || data.error_message);
+          }
+          if (data.status === "completed") {
             setTask(data);
             clearInterval(interval);
+          } else if (data.status === "failed") {
+            clearInterval(interval);
+            const errMsg = typeof data.error_message === 'string' ? data.error_message : "Error durante el análisis";
+            _recoverToHeadlines(selectedHeadline?.source_url, errMsg);
           }
         }
       } catch (e) {
@@ -292,6 +344,81 @@ function SearchContent() {
 
   return (
     <div className="animate-fade-in max-w-5xl mx-auto">
+
+      {/* ── Headline Confirmation Modal ──────────────────────── */}
+      {pendingHeadline && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setPendingHeadline(null)}
+          />
+          {/* Modal */}
+          <div className="relative w-full max-w-xl rounded-2xl border border-white/10 bg-[#111] shadow-2xl shadow-black/60 p-7 animate-fade-in">
+            {/* Header */}
+            <div className="flex items-start gap-3 mb-5">
+              <div className="shrink-0 mt-0.5 h-8 w-8 rounded-full bg-teal-500/20 flex items-center justify-center">
+                <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold uppercase tracking-widest text-teal-400 mb-1">Noticia seleccionada</p>
+                <h2 className="text-lg font-bold text-white leading-snug">{pendingHeadline.title}</h2>
+              </div>
+            </div>
+
+            {/* Meta */}
+            <div className="flex flex-wrap gap-3 mb-6 text-sm text-gray-400">
+              <div className="flex items-center gap-2 rounded-lg bg-white/5 border border-white/5 px-3 py-2">
+                <span className="text-xs font-bold uppercase tracking-wide text-gray-500">Fuente</span>
+                <span className="font-semibold text-white">{pendingHeadline.source_name}</span>
+              </div>
+              {pendingHeadline.published_at && (
+                <div className="flex items-center gap-2 rounded-lg bg-white/5 border border-white/5 px-3 py-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-gray-500">Fecha</span>
+                  <span>{new Date(pendingHeadline.published_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                </div>
+              )}
+            </div>
+
+            {/* URL preview */}
+            <div className="mb-7 rounded-lg bg-white/[0.03] border border-white/5 px-4 py-2.5">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-1">Enlace</p>
+              <a
+                href={pendingHeadline.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-teal-400/80 hover:text-teal-300 truncate block transition-colors"
+              >
+                {pendingHeadline.source_url.length > 80
+                  ? pendingHeadline.source_url.slice(0, 80) + '…'
+                  : pendingHeadline.source_url}
+              </a>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  const h = pendingHeadline;
+                  setPendingHeadline(null);
+                  startSearch(h.source_url, h);
+                }}
+                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 active:scale-95"
+              >
+                🚀 Continuar análisis
+              </button>
+              <button
+                onClick={() => setPendingHeadline(null)}
+                className="flex-1 py-3 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.07] text-gray-300 font-semibold text-sm transition-all active:scale-95"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {(status === "idle" || status === "error") && (
         <div className="flex flex-col items-center text-center py-12 mb-8">
           <h1 className="text-4xl font-display font-bold tracking-tight text-white sm:text-6xl mb-6 bg-clip-text text-transparent bg-gradient-to-r from-white via-gray-200 to-gray-400">
@@ -346,7 +473,7 @@ function SearchContent() {
             </div>
           ) : (
             <p className="mt-2 text-gray-400 pl-[1.4rem]">
-              Tema: <span className="text-teal-400 font-medium">&quot;{task?.query || task?.source_url || query}&quot;</span>
+              Tema: <span className="text-teal-400 font-medium">&quot;{task?.source_article?.title || task?.query || query}&quot;</span>
             </p>
           )}
         </div>
@@ -439,35 +566,49 @@ function SearchContent() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            {headlines.map((headline, idx) => (
-              <button
-                key={idx}
-                onClick={() => startSearch(headline.source_url, headline)}
-                className="text-left group relative flex flex-col justify-between h-full rounded-xl border border-white/5 bg-white/[0.02] p-5 hover:bg-white/[0.05] hover:border-teal-500/30 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-teal-900/10"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-bold tracking-wider text-teal-400 uppercase bg-teal-500/10 px-2 py-0.5 rounded-md">
-                      {headline.source_name || "Noticia"}
-                    </span>
-                    {headline.published_at && (
-                      <span className="text-[10px] text-gray-500">
-                        {new Date(headline.published_at).toLocaleDateString()}
-                      </span>
-                    )}
+            {headlines.map((headline, idx) => {
+              const isFailed = failedHeadlineUrls.has(headline.source_url);
+              return (
+                <button
+                  key={idx}
+                  onClick={() => setPendingHeadline(headline)}
+                  className={`text-left group relative flex flex-col justify-between h-full rounded-xl border p-5 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-teal-900/10 ${
+                    isFailed
+                      ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
+                      : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-teal-500/30'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold tracking-wider text-teal-400 uppercase bg-teal-500/10 px-2 py-0.5 rounded-md">
+                          {headline.source_name || "Noticia"}
+                        </span>
+                        {isFailed && (
+                          <span className="text-[10px] font-bold tracking-wider text-amber-400 uppercase bg-amber-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
+                            ⚠️ Error previo
+                          </span>
+                        )}
+                      </div>
+                      {headline.published_at && (
+                        <span className="text-[10px] text-gray-500">
+                          {new Date(headline.published_at).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-bold text-gray-200 group-hover:text-white mb-3 line-clamp-3 leading-snug">
+                      {headline.title}
+                    </h3>
                   </div>
-                  <h3 className="font-bold text-gray-200 group-hover:text-white mb-3 line-clamp-3 leading-snug">
-                    {headline.title}
-                  </h3>
-                </div>
-                <div className="mt-4 flex items-center text-xs font-medium text-gray-500 group-hover:text-teal-400 transition-colors">
-                  <span>Analizar esta noticia</span>
-                  <svg className="w-3 h-3 ml-1 transform group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                  </svg>
-                </div>
-              </button>
-            ))}
+                  <div className="mt-4 flex items-center text-xs font-medium text-gray-500 group-hover:text-teal-400 transition-colors">
+                    <span>{isFailed ? 'Reintentar análisis' : 'Analizar esta noticia'}</span>
+                    <svg className="w-3 h-3 ml-1 transform group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -494,7 +635,7 @@ function SearchContent() {
             {([
               { key: "article" as const, label: "📝 Artículo neutral", icon: "" },
               { key: "bias" as const, label: "🎯 Sesgo detectado", icon: "" },
-              { key: "sources" as const, label: "📊 Fuentes", icon: "" },
+              { key: "sources" as const, label: "📊 Posibles Fuentes", icon: "" },
             ]).map(tab => (
               <button
                 key={tab.key}
@@ -708,60 +849,102 @@ function SearchContent() {
                 <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-lg">📰</span>
-                    <h2 className="font-display text-lg font-bold">Artículos analizados</h2>
+                    <h2 className="font-display text-lg font-bold">Artículos relacionados</h2>
                     <span className="ml-auto rounded-full bg-white/5 px-2.5 py-0.5 text-xs font-medium text-gray-400">
                       {task.articles.length}
                     </span>
                   </div>
                   <div className="space-y-2">
-                    {task.articles.map((article) => (
-                      <a
-                        key={article.id}
-                        href={article.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-4 rounded-xl border border-white/5 bg-white/[0.02] p-4 transition-all hover:border-teal-500/20 hover:bg-white/[0.04] group"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="font-medium text-white truncate group-hover:text-teal-300 transition-colors">
-                            {article.title}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xs font-medium text-gray-400">{article.source_name}</span>
-                            {article.author && (
-                              <>
-                                <span className="text-gray-600">·</span>
-                                <span className="text-xs text-gray-500 truncate max-w-[200px]">{article.author}</span>
-                              </>
-                            )}
-                            {article.published_at && (
-                              <>
-                                <span className="text-gray-600">·</span>
-                                <span className="text-xs text-gray-500">
-                                  {new Date(article.published_at).toLocaleDateString("es-ES")}
-                                </span>
-                              </>
-                            )}
+                    {task.articles.map((article) => {
+                      const isAnalyzed = article.status === 'ANALYZED' || article.status === 'CONTEXTUALIZED';
+                      return (
+                        <div
+                          key={article.id}
+                          className="flex items-center gap-4 rounded-xl border border-white/5 bg-white/[0.02] p-4 transition-all hover:border-teal-500/20 hover:bg-white/[0.04] group"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <a
+                              href={article.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-white truncate block group-hover:text-teal-300 transition-colors"
+                            >
+                              {article.title}
+                            </a>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-xs font-medium text-gray-400">{article.source_name}</span>
+                              {article.author && (
+                                <>
+                                  <span className="text-gray-600">·</span>
+                                  <span className="text-xs text-gray-500 truncate max-w-[200px]">{article.author}</span>
+                                </>
+                              )}
+                              {article.published_at && (
+                                <>
+                                  <span className="text-gray-600">·</span>
+                                  <span className="text-xs text-gray-500">
+                                    {new Date(article.published_at).toLocaleDateString("es-ES")}
+                                  </span>
+                                </>
+                              )}
+                            </div>
                           </div>
+
+                          {article.is_source && (
+                            <span className="shrink-0 rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-blue-300 ring-1 ring-inset ring-blue-500/30">
+                              Base
+                            </span>
+                          )}
+
+                          {isAnalyzed ? (
+                            <span className="shrink-0 rounded-md bg-teal-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-teal-300 ring-1 ring-inset ring-teal-500/30 flex items-center gap-1">
+                              ✅ Analizado
+                            </span>
+                          ) : (
+                            <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset ${
+                              article.status === 'DETECTING' || article.status === 'DETECTED' ? 'bg-gray-500/20 text-gray-300 ring-gray-500/30' :
+                              article.status === 'ANALYZING' ? 'bg-amber-500/20 text-amber-300 ring-amber-500/30' :
+                              'bg-gray-500/20 text-gray-300 ring-gray-500/30'
+                            }`}>
+                              {article.status === 'DETECTED' ? 'Detectado' :
+                               article.status === 'ANALYZING' ? 'Analizando...' :
+                               article.status || 'Detectado'}
+                            </span>
+                          )}
+
+                          {article.bias_score !== null && article.bias_score !== undefined && (
+                            <div className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-mono font-bold ${getBiasColor(article.bias_score).bg} ${getBiasColor(article.bias_score).text}`}>
+                              {(article.bias_score * 100).toFixed(0)}%
+                            </div>
+                          )}
+
+                          {/* Analizar button — only for non-source, non-analyzed articles */}
+                          {!article.is_source && !isAnalyzed && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/search?q=${encodeURIComponent(article.source_url)}`);
+                              }}
+                              className="shrink-0 rounded-lg bg-gradient-to-r from-teal-500/80 to-cyan-500/80 px-3 py-1.5 text-[11px] font-bold text-gray-950 transition-all hover:from-teal-400 hover:to-cyan-400 hover:shadow-md hover:shadow-teal-500/20 active:scale-95"
+                            >
+                              🔍 Analizar
+                            </button>
+                          )}
+
+                          <FeedbackButtons targetType="article" targetId={article.id} compact />
+                          <a
+                            href={article.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0"
+                          >
+                            <svg className="w-4 h-4 text-gray-500 group-hover:text-teal-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
                         </div>
-
-                        {article.is_source && (
-                          <span className="shrink-0 rounded-md bg-blue-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-blue-300 ring-1 ring-inset ring-blue-500/30">
-                            Base
-                          </span>
-                        )}
-
-                        {article.bias_score !== null && article.bias_score !== undefined && (
-                          <div className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-mono font-bold ${getBiasColor(article.bias_score).bg} ${getBiasColor(article.bias_score).text}`}>
-                            {(article.bias_score * 100).toFixed(0)}%
-                          </div>
-                        )}
-                        <FeedbackButtons targetType="article" targetId={article.id} compact />
-                        <svg className="w-4 h-4 text-gray-500 group-hover:text-teal-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

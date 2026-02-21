@@ -19,6 +19,13 @@ except ImportError:
 
 logger = structlog.get_logger(__name__)
 
+def generate_embeddings(texts: List[str]) -> List[List[float]]:
+    """Helper to generate generic embeddings."""
+    if not HAS_EMBEDDER or not texts:
+        return [[] for _ in texts]
+    embeddings = _embedder.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    return embeddings.tolist()
+
 
 class SemanticClusterer:
     """
@@ -40,13 +47,15 @@ class SemanticClusterer:
         embeddings = _embedder.encode(texts, show_progress_bar=False, normalize_embeddings=True)
         return embeddings
 
-    def filter_by_reference_query(self, hits: List[ArticleHit], reference_text: str) -> List[ArticleHit]:
+    def filter_by_reference_query(self, hits: List[ArticleHit], reference_text: str, threshold: float | None = None) -> List[ArticleHit]:
         """
         Calculates cosine similarity of each hit against a reference text (like a source URL).
-        Discards any hit below the strict threshold.
+        Discards any hit below the given threshold (defaults to self.similarity_threshold).
         """
         if not hits or not HAS_EMBEDDER:
             return hits
+            
+        _threshold = threshold if threshold is not None else self.similarity_threshold
             
         texts = [f"{hit.title} {hit.snippet or ''}" for hit in hits]
         # Get query embedding (1, D)
@@ -61,13 +70,13 @@ class SemanticClusterer:
         for i, score in enumerate(similarities):
             # Log the scores for debugging
             logger.debug("Hit similarity", title=hits[i].title[:40], score=score)
-            if score >= self.similarity_threshold:
+            if score >= _threshold:
                 filtered.append(hits[i])
                 
         logger.info("Semantic filtering complete (by reference)", 
                     original_count=len(hits), 
                     filtered_count=len(filtered),
-                    threshold=self.similarity_threshold)
+                    threshold=_threshold)
         return filtered
 
     def get_densest_cluster(self, hits: List[ArticleHit]) -> List[ArticleHit]:
@@ -85,11 +94,11 @@ class SemanticClusterer:
         # DBSCAN parameters:
         # eps is the max distance between two samples. 
         # Since we use normalized embeddings, Euclidean distance squared is 2*(1-cosine_sim).
-        # We want cosine_sim > 0.85 roughly.
-        # So distance = sqrt(2 * (1 - 0.85)) = sqrt(0.3) ~ 0.54. Let's use 0.5.
+        # We want cosine_sim > 0.87 roughly.
+        # So distance = sqrt(2 * (1 - 0.87)) = sqrt(0.26) ~ 0.51. Let's use 0.45 for tighter clusters.
         min_samples = max(2, min(4, len(hits) // 4)) # Minimum cluster size
         
-        dbscan = DBSCAN(eps=0.5, min_samples=min_samples, metric='euclidean')
+        dbscan = DBSCAN(eps=0.45, min_samples=min_samples, metric='euclidean')
         labels = dbscan.fit_predict(embs)
         
         # Find the label with the most items (excluding -1 noise)
@@ -103,7 +112,14 @@ class SemanticClusterer:
             return hits[:5] # Fallback
             
         best_cluster_label = counts.most_common(1)[0][0]
-        cluster_hits = [hits[i] for i, label in enumerate(labels) if label == best_cluster_label]
+        cluster_indices = [i for i, label in enumerate(labels) if label == best_cluster_label]
+        
+        # Sort cluster members by similarity to the cluster centroid
+        cluster_embs = embs[cluster_indices]
+        centroid = cluster_embs.mean(axis=0, keepdims=True)
+        sims = cosine_similarity(centroid, cluster_embs)[0]
+        sorted_indices = np.argsort(-sims)  # Descending
+        cluster_hits = [hits[cluster_indices[i]] for i in sorted_indices]
         
         logger.info("Semantic DBSCAN complete", 
                     total_hits=len(hits), 
@@ -111,3 +127,39 @@ class SemanticClusterer:
                     noise_eliminated=len(hits) - len(cluster_hits))
                     
         return cluster_hits
+
+class FactAssociator:
+    """Groups facts from multiple articles into consensus points."""
+    
+    def group_facts(self, facts: List['StructuredFact'], eps: float = 0.5) -> List[List['StructuredFact']]:
+        """
+        Groups facts based on their vector embeddings using DBSCAN.
+        Returns a list of fact clusters.
+        """
+        if not facts:
+            return []
+            
+        embs = [f.embedding for f in facts]
+        # Check if embeddings are present, fallback to generation if not
+        if None in embs:
+            logger.warning("Missing embeddings in StructuredFacts, regenerating fallback embeddings")
+            texts = [f.content for f in facts]
+            embs = generate_embeddings(texts)
+            
+        embs_array = np.array(embs)
+        
+        # min_samples=1 so unique facts aren't dropped as noise (-1)
+        dbscan = DBSCAN(eps=eps, min_samples=1, metric='euclidean')
+        labels = dbscan.fit_predict(embs_array)
+        
+        clusters = {}
+        for idx, label in enumerate(labels):
+            if label not in clusters:
+                clusters[label] = []
+            clusters[label].append(facts[idx])
+            
+        logger.info("Fact association complete", 
+                    total_facts=len(facts), 
+                    num_clusters=len(clusters))
+                    
+        return list(clusters.values())

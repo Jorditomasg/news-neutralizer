@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 class SearchRequest(BaseModel):
     """Search for news by topic."""
     query: str = Field(..., min_length=3, max_length=500, description="Search topic or keywords")
+    original_query: str | None = Field(None, description="Original search terms when querying from a headline")
     sources: list[str] | None = Field(None, description="Specific sources to search (None = all)")
 
 
@@ -69,6 +70,8 @@ class ArticleOut(BaseModel):
     author: str | None
     published_at: datetime | None
     body: str
+    status: str
+    analyzed_at: datetime | None
     bias_score: float | None
     bias_details: dict | None
     cluster_id: int | None
@@ -110,6 +113,8 @@ class SearchTaskOut(BaseModel):
     task_id: str
     status: str
     progress: int
+    progress_message: str | None = None
+    error_message: str | None = None
     query: str | None
     source_url: str | None
     created_at: datetime
@@ -168,3 +173,43 @@ class FeedbackCreate(BaseModel):
     target_type: str = Field(..., pattern=r"^(analysis|article|domain)$", description="What is being rated")
     target_id: str = Field(..., description="ID of the target (can be str or int casted to str)")
     vote: str = Field(..., pattern=r"^(like|dislike|neutral)$", description="Type of vote")
+
+
+class GeneratedNewsOut(BaseModel):
+    """Full generated news article."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    title: str
+    lead: str
+    body: str
+    context_articles_ids: list[int]
+    reliability_score_achieved: float | None
+    has_new_context_available: bool
+    created_at: datetime
+
+
+class StructuredFactSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    article_id: int
+    content: str
+    type: str
+
+class FactTraceabilityOut(BaseModel):
+    """A traceback link to the original fact."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    structured_fact: StructuredFactSummaryOut
+
+class GeneratedNewsDetailOut(GeneratedNewsOut):
+    """Detailed generated news with traceability."""
+    traces: list[FactTraceabilityOut] = []
+    source_articles: list[ArticleOut] = []
+
+class PaginatedGeneratedNewsOut(BaseModel):
+    """Paginated list of generated news."""
+    total: int
+    page: int
+    page_size: int
+    items: list[GeneratedNewsOut]

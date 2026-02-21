@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.models import SearchTask, UserAPIKey
+from app.models import SearchTask, UserAPIKey, Article
+from app.models.domain import ArticleStatus
 from app.schemas import SearchRequest, TaskCreated, ExtractArticleRequest, ArticlePreviewResponse
 from app.tasks.search_tasks import search_and_analyze, search_and_analyze_url
 from app.services.scraper import ArticleExtractor
@@ -143,10 +144,26 @@ async def search_news(
     provider_name, encrypted_key = await _get_user_ai_config(db)
 
     if is_url_input:
+        target_url = request.query.strip()
+        
+        # Fast-Track: Check if article is already ANALYZED
+        stmt = select(Article).where(Article.source_url == target_url, Article.status == ArticleStatus.ANALYZED)
+        result = await db.execute(stmt)
+        existing_article = result.scalars().first()
+        
+        if existing_article:
+            # Get the original search task id to redirect there
+            old_task_stmt = select(SearchTask).where(SearchTask.id == existing_article.search_task_id)
+            old_task_result = await db.execute(old_task_stmt)
+            old_task = old_task_result.scalar_one_or_none()
+            if old_task:
+                return TaskCreated(task_id=old_task.task_id)
+
         # URL mode: extract -> semantic query -> search -> analyze
         search_and_analyze_url.delay(
             task_id=task_id,
-            url=request.query.strip(),
+            url=target_url,
+            original_query=request.original_query,
             source_slugs=request.sources,
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
@@ -254,6 +271,8 @@ async def get_search_results(
             "author": a.author,
             "published_at": a.published_at.isoformat() if a.published_at else None,
             "body": a.body,
+            "status": a.status.value if hasattr(a.status, 'value') else a.status,
+            "analyzed_at": a.analyzed_at.isoformat() if a.analyzed_at else None,
             "bias_score": a.bias_score,
             "bias_details": a.bias_details,
             "cluster_id": a.cluster_id,

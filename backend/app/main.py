@@ -22,6 +22,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Create tables (in dev only — use Alembic migrations in prod)
     if settings.app_debug:
+        # Create extension outside transaction
+        async with engine.connect() as conn:
+            from sqlalchemy import text
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await conn.commit()
+            
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created (debug mode)")

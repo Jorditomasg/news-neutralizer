@@ -21,6 +21,8 @@ export interface Article {
   author: string | null;
   published_at: string | null;
   body: string;
+  status: string;
+  analyzed_at: string | null;
   bias_score: number | null;
   bias_details: BiasDetails | null;
   cluster_id: number | null;
