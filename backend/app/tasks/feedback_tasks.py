@@ -5,7 +5,7 @@ from sqlalchemy import select, update, func
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
-from app.tasks.search_tasks import SyncSessionLocal
+from app.tasks._celery_infra import SyncSessionLocal
 from app.models.domain import Feedback, Article, AnalysisResult, SourceDomain
 
 logger = structlog.get_logger(__name__)

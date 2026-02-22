@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.database import get_db
+from app.core.database import get_db, get_session_id
 from app.models import SearchTask, UserAPIKey, Article
 from app.models.domain import ArticleStatus
 from app.schemas import SearchRequest, TaskCreated, ExtractArticleRequest, ArticlePreviewResponse
@@ -43,83 +43,53 @@ def _is_url(text: str) -> bool:
 
 
 
-async def _check_topic_specificity(db: AsyncSession, topic: str, provider_name: str, encrypted_key: str | None) -> dict:
+async def _check_topic_specificity_fast(db: AsyncSession, topic: str) -> dict | None:
     """
-    Check topic specificity with strict heuristics, DB caching (TTL), and fail-closed AI validation.
+    Fast, non-blocking topic validation using heuristics and DB cache only.
+    
+    Returns a rejection dict if the topic is known to be too broad,
+    or None if it passes the fast checks (LLM validation will happen in the Celery task).
     """
     import hashlib
-    import asyncio
     from datetime import datetime, timedelta, timezone
     from app.models import TopicCache
-    from app.services.ai.factory import AIProviderFactory
-    from app.core.security import decrypt_api_key
     from app.config import settings
     
-    # 1. Fast Heuristic Filter
+    # 1. Fast Heuristic Filter (instant)
     words = topic.strip().split()
     if len(words) <= 2:
         return {"is_specific": False, "reason": "Por favor, proporciona más contexto (usa al menos 3 palabras) o selecciona una noticia concreta."}
 
-    # 2. Normalize and hash
+    # 2. Check DB Cache for previously evaluated topics (instant)
     normalized_topic = topic.strip().lower()
     topic_hash = hashlib.sha256(normalized_topic.encode()).hexdigest()
     
-    # 2. Check DB Cache
     stmt = select(TopicCache).where(TopicCache.topic_hash == topic_hash)
     result = await db.execute(stmt)
     cached = result.scalar_one_or_none()
     
     if cached:
-        # Check TTL
-        # Ensure cached.created_at is timezone-aware or handle naive
         now = datetime.now(timezone.utc)
         created_at = cached.created_at
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
             
         if created_at < now - timedelta(days=settings.topic_cache_ttl_days):
-            # Expired - Delete and re-evaluate
             await db.delete(cached)
             await db.commit()
-        else:
-            # Valid cache hit
-            return {"is_specific": cached.is_specific, "reason": cached.reason}
-        
-    # 3. Cache Miss - Call AI with Short Timeout (Fail Open)
-    api_key = decrypt_api_key(encrypted_key) if encrypted_key else None
+        elif not cached.is_specific:
+            # We know from a previous LLM evaluation that this topic is too broad
+            return {"is_specific": False, "reason": cached.reason}
     
-    try:
-        provider = AIProviderFactory.get(provider_name, api_key=api_key)
-        
-        # Enforce 30 second timeout for local AI
-        # If AI is slow, we FAIL CLOSED (reject)
-        try:
-            ai_result = await asyncio.wait_for(provider.evaluate_topic_specificity(topic), timeout=30.0)
-        except asyncio.TimeoutError:
-            # STRICT VERIFICATION: Timeout -> Reject search
-            return {"is_specific": False, "reason": "El modelo de IA está tardando demasiado en validar el contexto. Por favor, sé más específico o selecciona una noticia concreta de la lista."}
-            
-        # 4. Save to DB
-        new_cache = TopicCache(
-            topic_hash=topic_hash,
-            topic_text=normalized_topic,
-            is_specific=ai_result.get("is_specific", True),
-            reason=ai_result.get("reason", "")
-        )
-        db.add(new_cache)
-        await db.commit()
-        
-        return ai_result
-        
-    except Exception as e:
-        # If check fails, default to allowing it
-        return {"is_specific": True, "reason": "Error interno al verificar tema."}
+    # Passes fast checks — full LLM validation will happen in the Celery task
+    return None
 
 
 @router.post("/", response_model=TaskCreated)
 async def search_news(
     request: SearchRequest,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """
     Unified search: auto-detects URL vs topic query.
@@ -132,7 +102,7 @@ async def search_news(
     # Create search task record
     search_task = SearchTask(
         task_id=task_id,
-        session_id="default",
+        session_id=session_id,
         query=request.query if not is_url_input else None,
         source_url=request.query if is_url_input else None,
         status="pending",
@@ -169,20 +139,15 @@ async def search_news(
             encrypted_api_key=encrypted_key,
         )
     else:
-        # Topic mode: Verify specificity first!
-        # The user wants to BLOCK generic topics.
+        # Topic mode: Fast heuristic + cache check (non-blocking)
+        rejection = await _check_topic_specificity_fast(db, request.query)
         
-        # We need to await the specificity check.
-        # This adds latency but ensures quality.
-        specificity = await _check_topic_specificity(db, request.query, provider_name, encrypted_key)
-        
-        if not specificity.get("is_specific", True):
+        if rejection and not rejection.get("is_specific", True):
             from fastapi import HTTPException
-            reason = specificity.get("reason", "Tema demasiado genérico o ambiguo.")
-            # We return 400 so the frontend knows to stop and ask for clarification
+            reason = rejection.get("reason", "Tema demasiado genérico o ambiguo.")
             raise HTTPException(status_code=400, detail=f"AMBIGUOUS_TOPIC: {reason}")
 
-        # specific enough -> search RSS -> analyze
+        # Specific enough (or needs LLM check in worker) -> search RSS -> analyze
         search_and_analyze.delay(
             task_id=task_id,
             query=request.query,
@@ -190,9 +155,6 @@ async def search_news(
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
         )
-
-    return TaskCreated(task_id=task_id)
-
 
     return TaskCreated(task_id=task_id)
 

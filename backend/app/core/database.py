@@ -1,6 +1,8 @@
-"""Database engine and session management."""
+"""Database engine, session management, and request dependencies."""
 
 from collections.abc import AsyncGenerator
+
+from fastapi import Header
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -33,3 +35,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+def get_session_id(x_session_id: str = Header(default="default", alias="X-Session-ID")) -> str:
+    """Extract session ID from X-Session-ID header (falls back to 'default')."""
+    return x_session_id
+

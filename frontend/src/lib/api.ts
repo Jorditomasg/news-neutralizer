@@ -2,7 +2,11 @@
  * API client for communicating with the News Neutralizer backend.
  */
 
+import { getSessionId, sessionHeaders } from "./session";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+export { getSessionId, sessionHeaders };
 
 export class ApiError extends Error {
   constructor(
@@ -22,7 +26,7 @@ export async function apiClient<T>(
 
   const res = await fetch(url, {
     headers: {
-      "Content-Type": "application/json",
+      ...sessionHeaders(),
       ...options?.headers,
     },
     ...options,

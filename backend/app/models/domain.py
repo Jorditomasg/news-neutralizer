@@ -167,8 +167,8 @@ class ArticleCache(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Storing serialized vector as JSONB or Text if pgvector is not installed. We use JSONB for simplicity since it's just an array of floats
-    embedding_vector: Mapped[list | None] = mapped_column(JSONB, nullable=True) 
+    # pgvector column for ANN similarity search
+    embedding_vector: Mapped[list | None] = mapped_column(Vector(384), nullable=True) 
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

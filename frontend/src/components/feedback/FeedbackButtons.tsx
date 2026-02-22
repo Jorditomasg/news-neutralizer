@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { sessionHeaders } from "@/lib/session";
 
 interface FeedbackButtonsProps {
   targetType: "analysis" | "article" | "domain";
@@ -24,7 +25,7 @@ export function FeedbackButtons({ targetType, targetId, className = "", compact 
       
       const res = await fetch(`${API_BASE}/api/v1/feedback/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({
           target_type: targetType,
           target_id: String(targetId),

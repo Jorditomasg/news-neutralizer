@@ -4,41 +4,17 @@ Uses SYNCHRONOUS SQLAlchemy (psycopg2) instead of async to avoid
 asyncpg connection conflicts in forked Celery worker processes.
 """
 
-import asyncio
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import create_engine, select, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
-from app.config import settings
-from app.core.security import decrypt_api_key
 from app.models import AnalysisResult, Article, SearchTask
-from app.services.ai.factory import AIProviderFactory
+from app.tasks._celery_infra import SyncSessionLocal, run_async, get_ai_provider
 
 logger = structlog.get_logger()
-
-# ── Synchronous engine for Celery workers ─────────────────────
-# Celery forks worker processes — asyncpg connections can NOT be shared
-# across forks. We use psycopg2 (sync) for all DB access in tasks.
-_sync_engine = create_engine(
-    settings.sync_database_url,
-    echo=settings.app_debug,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-)
-SyncSessionLocal = sessionmaker(bind=_sync_engine)
-
-
-def _run_async(coro):
-    """Run an async coroutine from a sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 def _update_task_progress(task_id: str, status: str, progress: int, error_message: str | None = None, progress_message: str | None = None):
@@ -61,14 +37,6 @@ def _update_task_progress(task_id: str, status: str, progress: int, error_messag
         )
         session.execute(stmt)
         session.commit()
-
-
-def _get_ai_provider(provider_name: str, encrypted_api_key: str | None):
-    """Create an AI provider, decrypting the key if needed."""
-    api_key = None
-    if encrypted_api_key:
-        api_key = decrypt_api_key(encrypted_api_key)
-    return AIProviderFactory.get(provider_name, api_key=api_key)
 
 
 def _save_analysis(task_id: str, analysis, provider_name: str, extracted_articles):
@@ -184,12 +152,14 @@ def _search_and_analyze_sync(
     provider_name: str, encrypted_api_key: str | None
 ):
     """Synchronous implementation of the topic-based pipeline."""
+    import hashlib
     from app.services.scraper.extractor import ArticleExtractor
     from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.ai.clustering import SemanticClusterer
     from app.services.scraper.domain_filter import DomainFilter
     from app.services.cache_manager import SyncCacheManager
     from app.services.scraper.extractor import ExtractedArticle
+    from app.models.domain import TopicCache
     from urllib.parse import urlparse
 
     # ── Check Query Cache first ───────────────────────────────
@@ -202,6 +172,47 @@ def _search_and_analyze_sync(
             _update_task_progress(task_id, "completed", 100)
             return
 
+    # ── Topic Specificity Check (LLM, with DB cache) ──────────
+    _update_task_progress(task_id, "scraping", 2, progress_message="Validando especificidad del tema...")
+    normalized_topic = query.strip().lower()
+    topic_hash = hashlib.sha256(normalized_topic.encode()).hexdigest()
+
+    # Check if we already have a cached result for this topic
+    topic_is_cached = False
+    with SyncSessionLocal() as session:
+        from sqlalchemy import select as sa_select
+        stmt = sa_select(TopicCache).where(TopicCache.topic_hash == topic_hash)
+        cached_topic = session.execute(stmt).scalar_one_or_none()
+        if cached_topic:
+            topic_is_cached = True
+            if not cached_topic.is_specific:
+                _update_task_progress(task_id, "failed", 5, cached_topic.reason)
+                return
+
+    if not topic_is_cached:
+        try:
+            provider = get_ai_provider(provider_name, encrypted_api_key)
+            ai_result = run_async(provider.evaluate_topic_specificity(query))
+
+            # Cache the result
+            with SyncSessionLocal() as session:
+                new_cache = TopicCache(
+                    topic_hash=topic_hash,
+                    topic_text=normalized_topic,
+                    is_specific=ai_result.get("is_specific", True),
+                    reason=ai_result.get("reason", "")
+                )
+                session.add(new_cache)
+                session.commit()
+
+            if not ai_result.get("is_specific", True):
+                reason = ai_result.get("reason", "Tema demasiado genérico o ambiguo.")
+                _update_task_progress(task_id, "failed", 5, f"AMBIGUOUS_TOPIC: {reason}")
+                return
+        except Exception as e:
+            logger.warning("Topic specificity check failed, proceeding with search", error=str(e))
+            # Fail open: allow the search if LLM check fails
+
     extractor = ArticleExtractor()
     federator = FederatedSearchEngine()
     clusterer = SemanticClusterer(similarity_threshold=0.85)
@@ -211,7 +222,7 @@ def _search_and_analyze_sync(
     _update_task_progress(task_id, "scraping", 5, "Buscando noticias en modo federado (Global)...")
     logger.info("Step 1: Searching Federated Sources", task_id=task_id, query=query)
 
-    hits = _run_async(federator.search(query, max_results_per_provider=20))
+    hits = run_async(federator.search(query, max_results_per_provider=20))
 
     if not hits:
         _update_task_progress(task_id, "failed", 10, "No se encontraron artículos relevantes en ninguna fuente")
@@ -263,7 +274,7 @@ def _search_and_analyze_sync(
                     )
                 else:
                     # extract individual article
-                    article = _run_async(extractor.extract(hit.url))
+                    article = run_async(extractor.extract(hit.url))
                     article.source_name = hit.source_name # Ensure source name is preserved
                     
                     domain = urlparse(article.source_url).netloc
@@ -348,8 +359,8 @@ def _search_and_analyze_sync(
 
     try:
         _update_task_progress(task_id, "analyzing", 65)
-        provider = _get_ai_provider(provider_name, encrypted_api_key)
-        analysis = _run_async(provider.analyze_articles(articles_for_ai))
+        provider = get_ai_provider(provider_name, encrypted_api_key)
+        analysis = run_async(provider.analyze_articles(articles_for_ai))
     except Exception as e:
         error_msg = f"Error en análisis AI ({provider_name}): {str(e)[:500]}"
         logger.error("AI analysis failed", task_id=task_id, error=str(e))
@@ -406,7 +417,7 @@ def _search_and_analyze_url_sync(
     from urllib.parse import urlparse
 
     extractor = ArticleExtractor()
-    provider = _get_ai_provider(provider_name, encrypted_api_key)
+    provider = get_ai_provider(provider_name, encrypted_api_key)
 
     # ── Step 1: Extract source article from URL ───────────────
     _update_task_progress(task_id, "scraping", 0, progress_message="Descargando contenido del artículo...")
@@ -428,7 +439,7 @@ def _search_and_analyze_url_sync(
                     published_at=cached.published_at
                 )
             else:
-                source_article = _run_async(extractor.extract(url))
+                source_article = run_async(extractor.extract(url))
                 domain = urlparse(source_article.source_url).netloc
                 cache_manager.set_cached_article(
                     url=url,
@@ -474,55 +485,82 @@ def _search_and_analyze_url_sync(
         article_id = db_article.id
         session.commit()
 
-    # ── Step 4: Process Chunks ────────────────────────────────
-    extracted_facts_all = []
+    # ── Step 4: Process Chunks (parallel for external APIs) ─────
+    import asyncio
     
-    for i, chunk in enumerate(chunks, 1):
-        msg = f"Procesando bloque {i} de {total_chunks}..."
-        progress_pct = 10 + int((i / total_chunks) * 75)
-        _update_task_progress(task_id, "analyzing", progress_pct, progress_message=msg)
-        logger.info(msg, task_id=task_id)
-
-        try:
-            chunk_result = _run_async(provider.extract_facts_from_chunk(chunk))
+    # Ollama is single-GPU sequential; external APIs can handle concurrency
+    is_local_model = provider.name == "ollama"
+    max_concurrency = 1 if is_local_model else 3
+    
+    async def _process_chunks_parallel(chunks_list, ai_provider, concurrency):
+        """Process chunks with controlled concurrency."""
+        semaphore = asyncio.Semaphore(concurrency)
+        
+        async def process_one(chunk_text, chunk_idx):
+            async with semaphore:
+                result = await ai_provider.extract_facts_from_chunk(chunk_text)
+                return chunk_idx, result
+        
+        tasks = [process_one(c, i) for i, c in enumerate(chunks_list, 1)]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+    
+    _update_task_progress(task_id, "analyzing", 15, progress_message=f"Extrayendo hechos de {total_chunks} bloques...")
+    
+    chunk_results = run_async(_process_chunks_parallel(chunks, provider, max_concurrency))
+    
+    extracted_facts_all = []
+    pending_facts = []  # Accumulate StructuredFacts for batch insert
+    
+    for result in chunk_results:
+        if isinstance(result, Exception):
+            logger.error("Error extracting chunk", task_id=task_id, error=str(result))
+            continue
+        
+        chunk_idx, chunk_result = result
+        
+        # Accumulate facts for batch insert
+        for fact in chunk_result.facts:
+            pending_facts.append(StructuredFact(article_id=article_id, content=fact, type="FACT", chunk_index=chunk_idx))
+        for claim in chunk_result.unverified_claims:
+            pending_facts.append(StructuredFact(article_id=article_id, content=claim, type="UNVERIFIED_CLAIM", chunk_index=chunk_idx))
+        for bias in chunk_result.biases:
+            pending_facts.append(StructuredFact(article_id=article_id, content=f"{bias.get('type')}: {bias.get('quote')} - {bias.get('explanation')}", type="BIAS", chunk_index=chunk_idx))
+        for frame in chunk_result.framing:
+            pending_facts.append(StructuredFact(article_id=article_id, content=frame, type="FRAMING", chunk_index=chunk_idx))
+        
+        if chunk_result.entities:
+            pending_facts.append(StructuredFact(article_id=article_id, content="Entidades detectadas", type="ENTITIES", entities=chunk_result.entities, chunk_index=chunk_idx))
+        if chunk_result.tone:
+            pending_facts.append(StructuredFact(article_id=article_id, content=chunk_result.tone, type="TONE", chunk_index=chunk_idx))
             
-            with SyncSessionLocal() as session:
-                for fact in chunk_result.facts:
-                    session.add(StructuredFact(article_id=article_id, content=fact, type="FACT", chunk_index=i))
-                for claim in chunk_result.unverified_claims:
-                    session.add(StructuredFact(article_id=article_id, content=claim, type="UNVERIFIED_CLAIM", chunk_index=i))
-                for bias in chunk_result.biases:
-                    session.add(StructuredFact(article_id=article_id, content=f"{bias.get('type')}: {bias.get('quote')} - {bias.get('explanation')}", type="BIAS", chunk_index=i))
-                for frame in chunk_result.framing:
-                    session.add(StructuredFact(article_id=article_id, content=frame, type="FRAMING", chunk_index=i))
-                
-                # We could add entities and tone as facts, but entities array is in the model
-                if chunk_result.entities:
-                    session.add(StructuredFact(article_id=article_id, content="Entidades detectadas", type="ENTITIES", entities=chunk_result.entities, chunk_index=i))
-                if chunk_result.tone:
-                    session.add(StructuredFact(article_id=article_id, content=chunk_result.tone, type="TONE", chunk_index=i))
+        extracted_facts_all.extend(chunk_result.facts)
 
-                session.commit()
-                
-            extracted_facts_all.extend(chunk_result.facts)
-             
-        except Exception as e:
-            logger.error(f"Error extracting chunk {i}", task_id=task_id, error=str(e))
-            # Continue with other chunks
+    # Batch insert all accumulated facts in a single session
+    if pending_facts:
+        with SyncSessionLocal() as session:
+            session.add_all(pending_facts)
+            session.commit()
+        logger.info("Batch inserted chunk facts", count=len(pending_facts), task_id=task_id)
 
     # ── Step 5: Consolidate & Embeddings ───────────────────────
     _update_task_progress(task_id, "analyzing", 90, progress_message="Consolidando hechos atómicos extraídos...")
     
-    try:
-        consolidated_facts = _run_async(provider.consolidate_intra_article_facts(extracted_facts_all))
-    except Exception as e:
-        logger.error("Error deduplicating facts", error=str(e))
+    # Skip LLM consolidation for short articles (single chunk or few facts)
+    if len(extracted_facts_all) > 5 and total_chunks > 1:
+        try:
+            consolidated_facts = run_async(provider.consolidate_intra_article_facts(extracted_facts_all))
+        except Exception as e:
+            logger.error("Error deduplicating facts", error=str(e))
+            consolidated_facts = extracted_facts_all
+    else:
+        logger.info("Skipping LLM consolidation (single chunk or few facts)", 
+                     facts_count=len(extracted_facts_all), chunks=total_chunks, task_id=task_id)
         consolidated_facts = extracted_facts_all
         
     from app.services.ai.clustering import generate_embeddings
     embeddings = generate_embeddings(consolidated_facts)
 
-    # Temporarily create a fake AnalysisResult for backwards compatibility with the frontend
+    # Build AnalysisResult using real extracted data (not hardcoded values)
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
         search_task = session.execute(stmt).scalar_one()
@@ -531,6 +569,7 @@ def _search_and_analyze_url_sync(
         article.status = ArticleStatus.ANALYZED
         article.analyzed_at = datetime.now(timezone.utc)
         
+        # Replace raw FACT entries with consolidated + embedded versions
         from sqlalchemy import delete
         session.execute(delete(StructuredFact).where(StructuredFact.article_id == article_id, StructuredFact.type == "FACT"))
         
@@ -543,17 +582,33 @@ def _search_and_analyze_url_sync(
                 embedding=emb if len(emb) > 0 else None
             ))
         
-        # Clear any existing analysis result in case of celery task retry
+        # Collect real bias elements from extracted chunks
+        bias_facts = session.execute(
+            select(StructuredFact).where(
+                StructuredFact.article_id == article_id,
+                StructuredFact.type.in_(["BIAS", "FRAMING"])
+            )
+        ).scalars().all()
+        
+        real_bias_elements = [{"type": bf.type, "detail": bf.content} for bf in bias_facts]
+        
+        # Build a real summary from consolidated facts
+        summary_text = ". ".join(consolidated_facts[:7]) + "." if consolidated_facts else "No se extrajeron hechos."
+        
+        # Clear any existing analysis result (in case of retry)
         session.execute(delete(AnalysisResult).where(AnalysisResult.search_task_id == search_task.id))
         
-        # Build fake analysis
         analysis = AnalysisResult(
             search_task_id=search_task.id,
-            topic_summary=f"Análisis estructurado de la noticia: {source_article.title[:100]}",
-            objective_facts=consolidated_facts[:10], # Just a sample to show
-            bias_elements=[],
-            neutralized_summary=" ".join(consolidated_facts[:5]) if consolidated_facts else "No se extrajeron hechos.",
-            source_bias_scores={source_article.source_name: {"score": 0.5, "direction": "centro", "confidence": 0.5}},
+            topic_summary=f"Análisis estructurado: {source_article.title[:100]}",
+            objective_facts=consolidated_facts,
+            bias_elements=real_bias_elements,
+            neutralized_summary=summary_text,
+            source_bias_scores={source_article.source_name: {
+                "score": round(len(real_bias_elements) / max(len(consolidated_facts), 1), 2),
+                "direction": "por determinar",
+                "confidence": round(min(len(consolidated_facts) / 10, 1.0), 2)
+            }},
             provider_used=provider_name,
             model_used=provider.name,
             processing_time_ms=0,
@@ -566,7 +621,8 @@ def _search_and_analyze_url_sync(
         search_task.status = "completed"
         search_task.progress = 100
         session.commit()
-        logger.info(f"Article analysis completed", task_id=task_id, article_id=article_id)
+        logger.info(f"Article analysis completed", task_id=task_id, article_id=article_id,
+                     facts=len(consolidated_facts), biases=len(real_bias_elements))
         
     # Phase 6: Trigger check for new context availability on existing generated news
     from app.tasks.generate_tasks import check_new_context_availability

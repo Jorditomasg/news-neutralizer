@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import type { APIKeyInfo, AIProvider } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { sessionHeaders } from "@/lib/session";
 
 const PROVIDERS: { id: AIProvider; name: string; description: string; keyPrefix: string }[] = [
   { id: "openai", name: "OpenAI", description: "GPT-4o, GPT-4o-mini", keyPrefix: "sk-" },
@@ -24,7 +25,7 @@ export default function SettingsPage() {
 
   const fetchKeys = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/settings/api-keys`);
+      const res = await fetch(`${API_BASE}/api/v1/settings/api-keys`, { headers: sessionHeaders() });
       if (res.ok) {
         const data = await res.json();
         setKeys(data);
@@ -42,7 +43,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/settings/api-keys`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({ provider, api_key: value.trim() }),
       });
 
@@ -71,6 +72,7 @@ export default function SettingsPage() {
     try {
       await fetch(`${API_BASE}/api/v1/settings/api-keys/${provider}`, {
         method: "DELETE",
+        headers: sessionHeaders(),
       });
       await fetchKeys();
     } catch (e) {

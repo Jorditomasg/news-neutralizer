@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_db, get_session_id
 from app.models import Article, SearchTask
 from app.schemas import ArticlePreview, ExtractArticleRequest
 from app.services.scraper.extractor import ArticleExtractor
@@ -19,6 +19,7 @@ _extractor = ArticleExtractor()
 async def extract_article(
     request: ExtractArticleRequest,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """
     Extract article content from a URL.
@@ -33,7 +34,7 @@ async def extract_article(
     task_id = str(uuid.uuid4())
     search_task = SearchTask(
         task_id=task_id,
-        session_id="default",
+        session_id=session_id,
         source_url=str(request.url),
         status="preview",
     )

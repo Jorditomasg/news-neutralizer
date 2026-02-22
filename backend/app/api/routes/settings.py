@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_db, get_session_id
 from app.core.security import encrypt_api_key
 from app.models import UserAPIKey
 from app.schemas import APIKeyCreate, APIKeyOut
@@ -16,9 +16,9 @@ router = APIRouter()
 async def save_api_key(
     request: APIKeyCreate,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """Save or update a user's API key (encrypted at rest)."""
-    session_id = "default"  # TODO: extract from session/cookie
 
     # Check if key already exists for this provider
     stmt = select(UserAPIKey).where(
@@ -53,9 +53,9 @@ async def save_api_key(
 @router.get("/api-keys", response_model=list[APIKeyOut])
 async def list_api_keys(
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """List configured API keys (never returns the actual key values)."""
-    session_id = "default"
 
     stmt = select(UserAPIKey).where(UserAPIKey.session_id == session_id)
     result = await db.execute(stmt)
@@ -71,9 +71,9 @@ async def list_api_keys(
 async def delete_api_key(
     provider: str,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """Delete a user's API key."""
-    session_id = "default"
 
     stmt = select(UserAPIKey).where(
         UserAPIKey.session_id == session_id,

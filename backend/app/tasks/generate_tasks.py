@@ -1,46 +1,15 @@
 """Celery tasks for generating neutral news from validated facts."""
 
-import asyncio
 from datetime import datetime, timezone
 import structlog
 from sqlalchemy import select, update
-from sqlalchemy.orm import sessionmaker
 
 from app.celery_app import celery_app
-from app.config import settings
 from app.models.domain import Article, StructuredFact, GeneratedNews, FactTraceability, ArticleStatus
-
-from sqlalchemy import create_engine
-from app.api.routes.search import _get_user_ai_config
-
-# Synchronous engine for Celery
-_sync_engine = create_engine(
-    settings.sync_database_url,
-    echo=settings.app_debug,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-)
-SyncSessionLocal = sessionmaker(bind=_sync_engine)
+from app.tasks._celery_infra import SyncSessionLocal, run_async, get_ai_provider
 
 logger = structlog.get_logger(__name__)
 
-def _run_async(coro):
-    """Run an async coroutine synchronously."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if loop and loop.is_running():
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
-    else:
-        return asyncio.run(coro)
-
-def _get_ai_provider(provider_name: str, encrypted_api_key: str | None):
-    # Need to instantiate the correct provider class. We can use the factory pattern used in search_tasks.
-    # To keep it simple, we import it from search_tasks
-    from app.tasks.search_tasks import _get_ai_provider as get_ai
-    return get_ai(provider_name, encrypted_api_key)
 
 @celery_app.task(bind=True, max_retries=1)
 def generate_news_from_articles(self, articles_ids: list[int], provider_name: str = "openai", encrypted_api_key: str | None = None):
@@ -119,8 +88,8 @@ def generate_news_from_articles(self, articles_ids: list[int], provider_name: st
         "}"
     )
     
-    provider = _get_ai_provider(provider_name, encrypted_api_key)
-    response = _run_async(provider.analyze(prompt, max_tokens=2000))
+    provider = get_ai_provider(provider_name, encrypted_api_key)
+    response = run_async(provider.analyze(prompt, max_tokens=2000))
     
     # Parse JSON
     import json

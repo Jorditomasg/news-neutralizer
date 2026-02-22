@@ -1,6 +1,8 @@
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 import json
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -9,6 +11,58 @@ import structlog
 from app.models.domain import ArticleCache, QueryCache, AnalysisResult
 
 logger = structlog.get_logger(__name__)
+
+# Tracking params to strip from URLs for canonical cache hashing
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "ref", "source", "twclid", "mc_cid", "mc_eid",
+}
+
+# Common Spanish stop words for query normalization
+_STOP_WORDS = {
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del",
+    "en", "y", "o", "a", "al", "por", "con", "para", "que", "es", "se",
+    "su", "lo", "como", "más", "pero", "sobre", "entre",
+}
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for consistent cache hashing.
+    
+    Strips tracking parameters, fragments, trailing slashes,
+    'www.' prefix, and forces lowercase scheme+host.
+    """
+    parsed = urlparse(url)
+    # Lowercase scheme and host
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname or ""
+    if host.startswith("www."):
+        host = host[4:]
+    # Strip tracking query params
+    qs = parse_qs(parsed.query, keep_blank_values=False)
+    filtered_qs = {k: v for k, v in qs.items() if k.lower() not in _TRACKING_PARAMS}
+    clean_query = urlencode(filtered_qs, doseq=True)
+    # Strip trailing slash from path
+    path = parsed.path.rstrip("/") or "/"
+    # Reconstruct without fragment
+    normalized = urlunparse((scheme, host, path, parsed.params, clean_query, ""))
+    return normalized
+
+
+def _normalize_query_text(query: str) -> str:
+    """Normalize a search query for consistent cache hashing.
+    
+    Lowercases, collapses whitespace, strips punctuation,
+    and removes common Spanish stop words.
+    """
+    text = query.strip().lower()
+    # Remove punctuation except hyphens in compound words
+    text = re.sub(r'[^\w\s-]', ' ', text)
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Remove stop words (keep words ≥3 chars or not in stop list)
+    words = [w for w in text.split() if w not in _STOP_WORDS or len(w) >= 4]
+    return " ".join(words)
 
 class CacheManager:
     """Manages database-backed caching for articles and queries."""
@@ -22,11 +76,11 @@ class CacheManager:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
         
     def _normalize_query(self, query: str) -> str:
-        return query.strip().lower()
+        return _normalize_query_text(query)
 
     async def get_cached_article(self, url: str) -> ArticleCache | None:
         """Retrieve an unexpired article from cache by URL."""
-        url_hash = self._hash_string(url)
+        url_hash = self._hash_string(_normalize_url(url))
         stmt = select(ArticleCache).where(
             ArticleCache.url_hash == url_hash,
             ArticleCache.expires_at > datetime.now(timezone.utc)
@@ -43,7 +97,7 @@ class CacheManager:
 
     async def set_cached_article(self, url: str, canonical_url: str, domain: str, title: str, body: str, published_at: datetime | None, embedding_vector: list[float] | None = None) -> ArticleCache:
         """Save recently extracted and embedded article into cache."""
-        url_hash = self._hash_string(url)
+        url_hash = self._hash_string(_normalize_url(url))
         expires_at = datetime.now(timezone.utc) + timedelta(days=self.article_ttl_days)
         
         # Upsert logic (simplest way in SQLAlchemy async is merge or just query and update)
@@ -121,7 +175,7 @@ class CacheManager:
 
     async def invalidate_article(self, url: str) -> None:
         """Invalidate a cached article."""
-        url_hash = self._hash_string(url)
+        url_hash = self._hash_string(_normalize_url(url))
         stmt = select(ArticleCache).where(ArticleCache.url_hash == url_hash)
         result = await self.session.execute(stmt)
         cached = result.scalar_one_or_none()
@@ -142,10 +196,10 @@ class SyncCacheManager:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
         
     def _normalize_query(self, query: str) -> str:
-        return query.strip().lower()
+        return _normalize_query_text(query)
 
     def get_cached_article(self, url: str) -> ArticleCache | None:
-        url_hash = self._hash_string(url)
+        url_hash = self._hash_string(_normalize_url(url))
         stmt = select(ArticleCache).where(
             ArticleCache.url_hash == url_hash,
             ArticleCache.expires_at > datetime.now(timezone.utc)
@@ -156,7 +210,7 @@ class SyncCacheManager:
         return cached
 
     def set_cached_article(self, url: str, canonical_url: str, domain: str, title: str, body: str, published_at: datetime | None, embedding_vector: list[float] | None = None) -> ArticleCache:
-        url_hash = self._hash_string(url)
+        url_hash = self._hash_string(_normalize_url(url))
         expires_at = datetime.now(timezone.utc) + timedelta(days=self.article_ttl_days)
         
         stmt = select(ArticleCache).where(ArticleCache.url_hash == url_hash)

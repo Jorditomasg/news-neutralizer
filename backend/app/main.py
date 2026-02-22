@@ -31,6 +31,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created (debug mode)")
+        
+        # Create HNSW indexes for pgvector similarity search (B4/B5)
+        async with engine.connect() as conn:
+            from sqlalchemy import text
+            # HNSW index on structured_facts.embedding
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_structured_facts_embedding_hnsw
+                ON structured_facts
+                USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """))
+            # HNSW index on article_cache.embedding_vector
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_article_cache_embedding_hnsw
+                ON article_cache
+                USING hnsw (embedding_vector vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """))
+            await conn.commit()
+        logger.info("pgvector HNSW indexes created/verified")
 
     yield
 

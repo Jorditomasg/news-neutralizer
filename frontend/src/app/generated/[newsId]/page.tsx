@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Article } from "@/types"; // Alias it inside if needed, or replace ArticleOut with Article
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { sessionHeaders } from "@/lib/session";
 
 interface StructuredFactSummaryOut {
     id: number;
@@ -47,7 +48,7 @@ export default function GeneratedNewsDetailPage() {
     const fetchDetail = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE}/api/v1/generate/${newsId}`);
+        const res = await fetch(`${API_BASE}/api/v1/generate/${newsId}`, { headers: sessionHeaders() });
         if (!res.ok) {
             if (res.status === 404) throw new Error("Noticia generada no encontrada.");
             throw new Error("Error al cargar la noticia generada.");

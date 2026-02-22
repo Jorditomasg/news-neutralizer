@@ -7,6 +7,7 @@ import { SearchProgress } from "@/components/search/SearchProgress";
 import { SearchForm } from "@/components/search/SearchForm";
 import { FeedbackButtons } from "@/components/feedback/FeedbackButtons";
 import { useTaskContext } from "@/context/TaskContext";
+import { sessionHeaders } from "@/lib/session";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -89,7 +90,7 @@ function SearchContent() {
       setStatus("headlines_loading");
       const res = await fetch(`${API_BASE}/api/v1/search/headlines`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({ query: searchQuery }),
       });
 
@@ -114,7 +115,7 @@ function SearchContent() {
       setStatus("preview");
       const res = await fetch(`${API_BASE}/api/v1/search/preview`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({ url }),
       });
 
@@ -169,7 +170,7 @@ function SearchContent() {
 
       const res = await fetch(`${API_BASE}/api/v1/search/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify(payload),
       });
 
@@ -237,7 +238,7 @@ function SearchContent() {
 
   const fetchResults = async (id: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/search/${id}`);
+      const res = await fetch(`${API_BASE}/api/v1/search/${id}`, { headers: sessionHeaders() });
       if (res.ok) {
         const data = await res.json();
         setTask(data);
@@ -266,7 +267,7 @@ function SearchContent() {
   const pollResults = async (id: string) => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/search/${id}`);
+        const res = await fetch(`${API_BASE}/api/v1/search/${id}`, { headers: sessionHeaders() });
         if (res.ok) {
           const data = await res.json();
           setStatus(data.status);

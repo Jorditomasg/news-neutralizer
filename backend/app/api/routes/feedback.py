@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.core.database import get_db
+from app.core.database import get_db, get_session_id
 from app.models.domain import Feedback, SearchTask
 from app.schemas.schemas import FeedbackCreate
 from app.tasks.feedback_tasks import process_feedback_async
@@ -15,6 +15,7 @@ router = APIRouter()
 async def submit_feedback(
     payload: FeedbackCreate,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """
     Submit user feedback for an analysis, an article, or a domain.
@@ -25,7 +26,7 @@ async def submit_feedback(
         target_type=payload.target_type,
         target_id=payload.target_id,
         vote=payload.vote,
-        session_id="default" # For now, assuming single user or anonymous
+        session_id=session_id
     )
     
     db.add(feedback_entry)

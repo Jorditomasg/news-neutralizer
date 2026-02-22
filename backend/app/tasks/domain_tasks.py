@@ -4,33 +4,11 @@ from urllib.parse import urlparse
 
 from app.celery_app import celery_app
 from app.models.domain import SourceDomain
-from sqlalchemy import create_engine, select, update
-from sqlalchemy.orm import sessionmaker
-from app.config import settings
-
-# Wait, `_get_ai_provider` is in `search_tasks.py`, we should reuse it or put it in a shared place.
-# For now, I'll import AIProviderFactory directly.
-from app.services.ai.factory import AIProviderFactory
+from sqlalchemy import select, update
+from app.tasks._celery_infra import SyncSessionLocal, run_async, get_ai_provider
 
 logger = structlog.get_logger(__name__)
 
-# Sync engine for Celery (fork-safe)
-_sync_engine = create_engine(
-    settings.sync_database_url,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-)
-SyncSessionLocal = sessionmaker(bind=_sync_engine)
-
-
-def _run_async(coro):
-    import asyncio
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 
 def extract_domain(url: str) -> str:
@@ -75,48 +53,56 @@ def discover_and_evaluate_domains(self, urls: list[str], provider_name: str = "o
         logger.info("No new domains to evaluate")
         return
 
-    # For each new domain, trigger an evaluation
-    from app.core.security import decrypt_api_key
+    # Batch-evaluate all new domains in a single LLM call
+    import json
     
-    api_key = None
-    if encrypted_api_key:
-        api_key = decrypt_api_key(encrypted_api_key)
+    provider = get_ai_provider(provider_name, encrypted_api_key)
+    
+    domains_list = ", ".join(f"'{d}'" for d in untracked)
+    prompt = (
+        f"Analiza la credibilidad periodística y el sesgo editorial de los siguientes dominios web: {domains_list}.\n\n"
+        "Instrucciones:\n"
+        "1. Si el dominio es un medio de comunicación establecido, asígnale un trust_score alto (70-100).\n"
+        "2. Si es un agregador genérico (yahoo, msn), dale un trust_score medio (50-70).\n"
+        "3. Si es un blog personal, página satírica, fuente de desinformación conocida o hiper-partidista sin rigor, asígnale un trust_score bajo (0-40).\n"
+        "4. Si NO CONOCES el dominio, dale un trust_score conservador de 40.\n\n"
+        "Responde SOLO con un JSON array válido con un objeto por cada dominio:\n"
+        "[\n"
+        "  {\n"
+        '    "domain": "ejemplo.com",\n'
+        '    "trust_score": un número de 0 a 100,\n'
+        '    "bias_lean": "left" | "center-left" | "center" | "center-right" | "right" | "extreme" | "unknown",\n'
+        '    "reasoning": "Explicación muy breve."\n'
+        "  }\n"
+        "]\n"
+    )
+    
+    try:
+        logger.info("Batch evaluating domains", count=len(untracked), domains=untracked)
+        response_text = run_async(provider.analyze(prompt, max_tokens=200 * len(untracked)))
         
-    provider = AIProviderFactory.get(provider_name, api_key=api_key)
-    
-    for domain in untracked:
-        try:
-            logger.info("Evaluating domain trust", domain=domain)
-            # We ask the AI to evaluate the credibility of the domain.
-            # Using generic knowledge since this is a known URL.
-            prompt = (
-                f"Analiza la credibilidad periodística y el sesgo editorial del dominio web: '{domain}'.\n\n"
-                "Instrucciones:\n"
-                "1. Si el dominio es un medio de comunicación establecido, asígnale un trust_score alto (70-100).\n"
-                "2. Si es un agregador genérico (yahoo, msn), dale un trust_score medio (50-70).\n"
-                "3. Si es un blog personal, página satírica, fuente de desinformación conocida o hiper-partidista sin rigor, asígnale un trust_score bajo (0-40).\n"
-                "4. Si NO CONOCES el dominio, dale un trust_score conservador de 40.\n\n"
-                "Responde SOLO con JSON válido con esta estructura:\n"
-                "{\n"
-                '  "trust_score": un número de 0 a 100,\n'
-                '  "bias_lean": "left", "center-left", "center", "center-right", "right", "extreme", "unknown",\n'
-                '  "reasoning": "Explicación muy breve de por qué."\n'
-                "}"
-            )
-            
-            response_text = _run_async(provider.analyze(prompt, max_tokens=150))
-            
-            # Parse the JSON response
-            import json
-            # basic clean
-            clean_res = response_text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_res)
-            
-            trust_score = int(data.get("trust_score", 40))
-            bias = str(data.get("bias_lean", "unknown"))
-            reasoning = str(data.get("reasoning", "Sin datos"))
-            
-            with SyncSessionLocal() as session:
+        # Parse the JSON array response
+        clean_res = response_text.replace("```json", "").replace("```", "").strip()
+        evaluations = json.loads(clean_res)
+        
+        if not isinstance(evaluations, list):
+            evaluations = [evaluations]
+        
+        # Map evaluations by domain name
+        eval_map = {}
+        for ev in evaluations:
+            d = ev.get("domain", "").lower().strip()
+            if d:
+                eval_map[d] = ev
+        
+        # Update DB in batch
+        with SyncSessionLocal() as session:
+            for domain in untracked:
+                ev = eval_map.get(domain, {})
+                trust_score = int(ev.get("trust_score", 40))
+                bias = str(ev.get("bias_lean", "unknown"))
+                reasoning = str(ev.get("reasoning", "Sin datos"))
+                
                 stmt = update(SourceDomain).where(SourceDomain.domain == domain).values(
                     is_evaluated=True,
                     trust_score=trust_score,
@@ -125,8 +111,32 @@ def discover_and_evaluate_domains(self, urls: list[str], provider_name: str = "o
                     evaluated_at=datetime.now(timezone.utc)
                 )
                 session.execute(stmt)
-                session.commit()
                 logger.info("Domain evaluated", domain=domain, score=trust_score, bias=bias)
+            session.commit()
+            
+    except Exception as e:
+        logger.error("Batch domain evaluation failed, falling back to individual", error=str(e))
+        # Fallback: evaluate one by one
+        for domain in untracked:
+            try:
+                single_prompt = (
+                    f"Analiza la credibilidad periodística y el sesgo editorial del dominio web: '{domain}'.\n\n"
+                    "Responde SOLO con JSON válido:\n"
+                    '{"trust_score": número 0-100, "bias_lean": "center|left|right|unknown", "reasoning": "breve"}'
+                )
+                response_text = run_async(provider.analyze(single_prompt, max_tokens=150))
+                clean_res = response_text.replace("```json", "").replace("```", "").strip()
+                data = json.loads(clean_res)
                 
-        except Exception as e:
-            logger.error("Failed to evaluate domain", domain=domain, error=str(e))
+                with SyncSessionLocal() as session:
+                    stmt = update(SourceDomain).where(SourceDomain.domain == domain).values(
+                        is_evaluated=True,
+                        trust_score=int(data.get("trust_score", 40)),
+                        bias_lean=str(data.get("bias_lean", "unknown")),
+                        ai_reasoning=str(data.get("reasoning", "Sin datos")),
+                        evaluated_at=datetime.now(timezone.utc)
+                    )
+                    session.execute(stmt)
+                    session.commit()
+            except Exception as inner_e:
+                logger.error("Failed to evaluate domain", domain=domain, error=str(inner_e))
