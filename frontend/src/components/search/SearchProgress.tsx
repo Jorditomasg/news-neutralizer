@@ -76,8 +76,8 @@ export function SearchProgress({ status, progress, message }: SearchProgressProp
   const activeProgress = activeStep.localProgress;
 
   return (
-    <div className="w-full max-w-4xl mx-auto my-12 animate-fade-in">
-      <div className="relative overflow-hidden bg-gray-950/40 backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-12 shadow-[0_0_100px_rgba(45,212,191,0.1)] ring-1 ring-white/5">
+    <div className="w-full max-w-4xl mx-auto my-12 animate-fade-in relative z-20">
+      <div className="relative overflow-hidden bg-white/70 dark:bg-gray-950/40 backdrop-blur-xl border border-gray-200 dark:border-white/10 rounded-3xl p-8 md:p-12 shadow-xl dark:shadow-[0_0_100px_rgba(45,212,191,0.1)] ring-1 ring-gray-100 dark:ring-white/5 transition-colors">
         
         {/* Decorative background glow */}
         <div className="absolute -top-24 -right-24 w-64 h-64 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -86,10 +86,10 @@ export function SearchProgress({ status, progress, message }: SearchProgressProp
         {/* Header Section */}
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-12 relative z-10">
           <div>
-             <h2 className="text-2xl md:text-3xl font-display font-bold text-white mb-2 tracking-tight">
-               Analizando <span className="text-teal-400 opacity-90">"{activeStep.label}"</span>
+             <h2 className="text-2xl md:text-3xl font-display font-bold text-gray-900 dark:text-white mb-2 tracking-tight transition-colors">
+               Analizando <span className="text-teal-600 dark:text-teal-400 opacity-90 transition-colors">"{activeStep.label}"</span>
              </h2>
-             <p className="text-gray-400 max-w-lg text-sm md:text-base leading-relaxed">
+             <p className="text-gray-600 dark:text-gray-400 max-w-lg text-sm md:text-base leading-relaxed transition-colors">
                {message || (status === "scraping" ? "Extrayendo información clave de múltiples fuentes..." : 
                 status === "analyzing" ? "Detectando sesgos y verificando hechos con IA..." : 
                 "Iniciando el motor de búsqueda neutral...")}
@@ -99,7 +99,7 @@ export function SearchProgress({ status, progress, message }: SearchProgressProp
           {/* Circular Progress Indicator */}
           <div className="relative w-16 h-16 md:w-20 md:h-20 flex items-center justify-center shrink-0">
              <svg className="w-full h-full rotate-[-90deg]" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="6" />
+                <circle cx="50" cy="50" r="45" fill="none" className="stroke-gray-200 dark:stroke-white/10" strokeWidth="6" />
                 <circle 
                   cx="50" cy="50" r="45" fill="none" stroke="url(#gradient)" strokeWidth="6" 
                   strokeDasharray="283" 
@@ -113,7 +113,7 @@ export function SearchProgress({ status, progress, message }: SearchProgressProp
                   </linearGradient>
                 </defs>
              </svg>
-             <span className="absolute text-sm md:text-base font-mono font-bold text-teal-400">{Math.round(activeProgress)}%</span>
+             <span className="absolute text-sm md:text-base font-mono font-bold text-teal-600 dark:text-teal-400 transition-colors">{Math.round(activeProgress)}%</span>
           </div>
         </div>
 
@@ -128,26 +128,26 @@ export function SearchProgress({ status, progress, message }: SearchProgressProp
                 key={step.id} 
                 className={`relative overflow-hidden rounded-2xl p-6 transition-all duration-500 border ${
                   isActive 
-                    ? "bg-white/[0.03] border-teal-500/30 ring-1 ring-teal-500/20 shadow-lg shadow-teal-900/10" 
+                    ? "bg-white dark:bg-white/[0.03] border-teal-500/30 ring-1 ring-teal-500/20 shadow-lg shadow-teal-500/5 dark:shadow-teal-900/10" 
                     : isCompleted
-                      ? "bg-teal-500/[0.02] border-teal-500/10 opacity-70"
-                      : "bg-gray-900/20 border-white/5 opacity-40 grayscale"
+                      ? "bg-teal-50 dark:bg-teal-500/[0.02] border-teal-200 dark:border-teal-500/10 opacity-70"
+                      : "bg-gray-100/50 dark:bg-gray-900/20 border-gray-200 dark:border-white/5 opacity-60 dark:opacity-40 grayscale"
                 }`}
               >
                 {isActive && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-500 via-cyan-400 to-teal-500 animate-loading-bar" />}
                 
                 <div className="flex items-center justify-between mb-3">
-                   <div className={`p-2 rounded-lg ${isActive ? "bg-teal-500/10 text-teal-400" : isCompleted ? "bg-teal-500/10 text-teal-500" : "bg-white/5 text-gray-500"}`}>
+                   <div className={`p-2 rounded-lg ${isActive ? "bg-teal-100 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400" : isCompleted ? "bg-teal-100 dark:bg-teal-500/10 text-teal-600 dark:text-teal-500" : "bg-gray-200 dark:bg-white/5 text-gray-500"}`}>
                       {isCompleted ? (
                         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
                       ) : (
                         <span className="font-bold font-mono text-sm">{index + 1}</span>
                       )}
                    </div>
-                   {isActive && <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_10px_#2dd4bf]" />}
+                   {isActive && <div className="w-2 h-2 rounded-full bg-teal-500 dark:bg-teal-400 animate-pulse shadow-[0_0_10px_#2dd4bf]" />}
                 </div>
                 
-                <h3 className={`font-bold text-lg mb-1 ${isActive ? "text-white" : isCompleted ? "text-gray-300" : "text-gray-500"}`}>
+                <h3 className={`font-bold text-lg mb-1 transition-colors ${isActive ? "text-gray-900 dark:text-white" : isCompleted ? "text-gray-700 dark:text-gray-300" : "text-gray-500"}`}>
                   {step.label}
                 </h3>
               </div>

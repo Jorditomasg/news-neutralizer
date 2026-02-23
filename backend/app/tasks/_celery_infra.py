@@ -34,7 +34,9 @@ def run_async(coro):
     Always creates a fresh event loop to avoid conflicts with
     Celery's prefork worker model.
     """
+    import nest_asyncio
     loop = asyncio.new_event_loop()
+    nest_asyncio.apply(loop)
     try:
         return loop.run_until_complete(coro)
     finally:

@@ -20,6 +20,8 @@ dependencies = [
     # Task Queue
     "celery[redis]>=5.4.0",
     "redis>=5.2.0",
+    "gevent>=24.2.1",
+    "psycogreen>=1.0.2",
     # HTTP Client (async)
     "httpx>=0.28.0",
     # Scraping
@@ -41,6 +43,8 @@ dependencies = [
     "structlog>=24.4.0",
     # Rate limiting
     "slowapi>=0.1.9",
+    # Asyncio helpers
+    "nest-asyncio>=1.6.0",
 ]
 
 [project.optional-dependencies]

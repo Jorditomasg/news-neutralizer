@@ -85,16 +85,16 @@ export default function SettingsPage() {
   return (
     <div className="animate-fade-in max-w-2xl mx-auto">
       <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold">Configuración</h1>
-        <p className="mt-2 text-gray-400">
+        <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">Configuración</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400 transition-colors">
           Configura tus claves API para los proveedores de IA. Las claves se cifran antes de
           almacenarse.
         </p>
       </div>
 
       {/* Security Notice */}
-      <div className="mb-8 rounded-2xl border border-teal-500/20 bg-teal-500/5 p-4">
-        <p className="text-sm text-teal-300">
+      <div className="mb-8 rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4 transition-colors">
+        <p className="text-sm text-teal-800 dark:text-teal-300 transition-colors">
           🔒 Tus claves API se cifran con Fernet (AES-128-CBC) y nunca se exponen en texto
           plano. Si no configuras ninguna clave, se usará Ollama local (gratis, sin API key).
         </p>
@@ -105,29 +105,29 @@ export default function SettingsPage() {
         {PROVIDERS.map((provider) => (
           <div
             key={provider.id}
-            className="rounded-2xl border border-white/10 bg-white/[0.02] p-5"
+            className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none transition-colors"
           >
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="font-display font-semibold text-white">
+                <h3 className="font-display font-semibold text-gray-900 dark:text-white transition-colors">
                   {provider.name}
                 </h3>
-                <p className="text-xs text-gray-500">{provider.description}</p>
+                <p className="text-xs text-gray-500 transition-colors">{provider.description}</p>
               </div>
               {hasKey(provider.id) ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-emerald-400 bg-emerald-500/10 rounded-lg px-2 py-1">
+                  <span className="text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 rounded-lg px-2 py-1 transition-colors">
                     Configurada
                   </span>
                   <button
                     onClick={() => deleteKey(provider.id)}
-                    className="text-xs text-red-400 hover:text-red-300"
+                    className="text-xs text-red-600 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 transition-colors"
                   >
                     Eliminar
                   </button>
                 </div>
               ) : (
-                <span className="text-xs text-gray-600 bg-white/5 rounded-lg px-2 py-1">
+                <span className="text-xs text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-white/5 rounded-lg px-2 py-1 transition-colors">
                   {provider.id === "ollama" ? "No requiere clave" : "No configurada"}
                 </span>
               )}
@@ -143,12 +143,12 @@ export default function SettingsPage() {
                     setInputValues({ ...inputValues, [provider.id]: e.target.value })
                   }
                   placeholder={`${provider.keyPrefix}...`}
-                  className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white placeholder-gray-600 outline-none focus:border-teal-400/40 focus:ring-1 focus:ring-teal-400/20"
+                  className="flex-1 rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 outline-none focus:border-teal-400/50 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-400/20 transition-colors"
                 />
                 <button
                   onClick={() => saveKey(provider.id)}
                   disabled={!inputValues[provider.id]?.trim() || saving === provider.id}
-                  className="rounded-xl bg-white/5 px-4 py-2 text-sm text-white transition-colors hover:bg-white/10 disabled:opacity-30"
+                  className="rounded-xl bg-gray-100 dark:bg-white/5 px-4 py-2 text-sm text-gray-900 dark:text-white transition-colors hover:bg-gray-200 dark:hover:bg-white/10 disabled:opacity-30 border border-gray-200 dark:border-transparent"
                 >
                   {saving === provider.id ? "..." : "Guardar"}
                 </button>
@@ -157,7 +157,7 @@ export default function SettingsPage() {
 
             {/* Feedback */}
             {feedback[provider.id] && (
-              <p className="mt-2 text-xs text-gray-400">{feedback[provider.id]}</p>
+              <p className="mt-2 text-xs text-gray-600 dark:text-gray-400 transition-colors">{feedback[provider.id]}</p>
             )}
           </div>
         ))}

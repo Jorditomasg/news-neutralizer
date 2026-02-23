@@ -65,6 +65,9 @@ def _process_article_feedback(session: Session, feedback: Feedback):
         domain_entry.trust_score = new_score
         logger.info("Penalized domain trust score based on article dislike", domain=domain_entry.domain, new_score=new_score)
         session.commit()
+        # Recalculate reliability score
+        from app.services.reliability import update_domain_reliability
+        update_domain_reliability(session, domain_entry.domain)
 
 def _process_analysis_feedback(session: Session, feedback: Feedback):
     """
@@ -91,3 +94,6 @@ def _process_domain_feedback(session: Session, feedback: Feedback):
         domain_entry.trust_score = new_score
         logger.info("Adjusted domain trust score from direct feedback", domain=domain_name, delta=delta, new_score=new_score)
         session.commit()
+        # Recalculate reliability score
+        from app.services.reliability import update_domain_reliability
+        update_domain_reliability(session, domain_name)

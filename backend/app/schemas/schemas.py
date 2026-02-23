@@ -56,6 +56,7 @@ class ArticlePreviewResponse(BaseModel):
     author: str | None = None
     published_at: datetime | None = None
     topics: list[str] = []
+    has_paywall: bool = False
 
 
 

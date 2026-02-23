@@ -1,6 +1,7 @@
 """Search endpoints: topic search and cross-reference."""
 
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -160,7 +161,10 @@ async def search_news(
 
 
 @router.post("/headlines", response_model=list[ArticlePreviewResponse])
-async def search_headlines(request: SearchRequest):
+async def search_headlines(
+    request: SearchRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
     Search for headlines (without starting full analysis).
     Used for the "Disambiguation" step in frontend.
@@ -170,17 +174,19 @@ async def search_headlines(request: SearchRequest):
     
     hits = await search_google_news_rss(request.query, max_results=10)
     
-    return [
-        ArticlePreviewResponse(
+    responses = []
+    for hit in hits:
+        responses.append(ArticlePreviewResponse(
             title=hit.title,
             source_name=hit.source_name,
             source_url=hit.url,
             author=None,
-            published_at=None, # Google News RSS date format needs parsing if we want it here
+            published_at=None,
             topics=[],
-        )
-        for hit in hits
-    ]
+            has_paywall=False,
+        ))
+        
+    return responses
 
 
 @router.post("/preview", response_model=ArticlePreviewResponse)
@@ -239,6 +245,7 @@ async def get_search_results(
             "bias_details": a.bias_details,
             "cluster_id": a.cluster_id,
             "is_source": a.is_source,
+            "is_truncated": a.is_truncated,
         }
         for a in task.articles
     ]
@@ -266,6 +273,17 @@ async def get_search_results(
             "tokens_used": task.analysis.tokens_used,
         }
 
+    # Build warnings list
+    from app.models.domain import SourceDomain
+    warnings = []
+    for a in task.articles:
+        if a.is_truncated:
+            warnings.append(
+                f"⚠️ El medio {a.source_name} parece tener contenido de pago. "
+                f"El artículo podría estar incompleto y el análisis podría no ser fiable."
+            )
+            break  # one warning per task is enough
+
     return {
         "task_id": task.task_id,
         "status": task.status,
@@ -278,4 +296,5 @@ async def get_search_results(
         "articles": articles_out,
         "analysis": analysis_out,
         "error_message": task.error_message,
+        "warnings": warnings,
     }

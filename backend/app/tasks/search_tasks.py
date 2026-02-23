@@ -17,6 +17,28 @@ from app.tasks._celery_infra import SyncSessionLocal, run_async, get_ai_provider
 logger = structlog.get_logger()
 
 
+def _record_paywall_hit(domain: str, is_truncated: bool, indicators: list[str]):
+    """If an article was detected as truncated, mark the domain."""
+    if not is_truncated:
+        return
+    from app.models.domain import SourceDomain
+    from app.services.reliability import update_domain_reliability
+    with SyncSessionLocal() as session:
+        stmt = select(SourceDomain).where(SourceDomain.domain == domain)
+        domain_entry = session.execute(stmt).scalar_one_or_none()
+        if domain_entry:
+            domain_entry.has_paywall = True
+            domain_entry.paywall_hits_count = (domain_entry.paywall_hits_count or 0) + 1
+            session.commit()
+            update_domain_reliability(session, domain)
+        else:
+            # Domain not yet tracked — create it with paywall flag
+            new_dom = SourceDomain(domain=domain, is_evaluated=False, has_paywall=True, paywall_hits_count=1)
+            session.add(new_dom)
+            session.commit()
+        logger.info("Paywall hit recorded", domain=domain, indicators=indicators)
+
+
 def _update_task_progress(task_id: str, status: str, progress: int, error_message: str | None = None, progress_message: str | None = None):
     """Update task status and progress in the database (sync)."""
     with SyncSessionLocal() as session:
@@ -101,7 +123,8 @@ def _copy_cached_result_to_task(session: Session, new_task_id: str, cached_resul
             bias_details=a.bias_details,
             cluster_id=a.cluster_id,
             trust_score=a.trust_score,
-            similarity_score=a.similarity_score
+            similarity_score=a.similarity_score,
+            is_truncated=a.is_truncated,
         )
         session.add(new_article)
         
@@ -286,6 +309,9 @@ def _search_and_analyze_sync(
                         body=article.body,
                         published_at=article.published_at
                     )
+                    # Record paywall hit if detected
+                    if article.is_truncated:
+                        _record_paywall_hit(domain, True, article.paywall_indicators)
                     
             extracted.append(article)
             
@@ -332,6 +358,7 @@ def _search_and_analyze_sync(
                 author=article.author[:200] if article.author else None,
                 published_at=article.published_at,
                 is_source=False,
+                is_truncated=getattr(article, 'is_truncated', False),
             )
             session.add(db_article)
 
@@ -410,13 +437,16 @@ def _search_and_analyze_url_sync(
 ):
     """Synchronous implementation of the URL-based pipeline (Fact-Based Analysis)."""
     from app.services.scraper.extractor import ArticleExtractor
+    from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.cache_manager import SyncCacheManager
     from app.services.scraper.extractor import ExtractedArticle
     from app.models.domain import Article, ArticleStatus, StructuredFact, AnalysisResult
     from app.core.chunking import segment_text_into_chunks
+    from app.services.scraper.url_utils import normalize_url
     from urllib.parse import urlparse
 
     extractor = ArticleExtractor()
+    federator = FederatedSearchEngine()
     provider = get_ai_provider(provider_name, encrypted_api_key)
 
     # ── Step 1: Extract source article from URL ───────────────
@@ -455,6 +485,29 @@ def _search_and_analyze_url_sync(
         _update_task_progress(task_id, "failed", 5, error_msg)
         return
 
+    # Record paywall hit on the domain if detected
+    from urllib.parse import urlparse as _urlparse
+    source_domain = _urlparse(source_article.source_url).netloc
+    if source_domain.startswith("www."):
+        source_domain = source_domain[4:]
+    if source_article.is_truncated:
+        _record_paywall_hit(source_domain, True, source_article.paywall_indicators)
+
+    # ── Step 1.5: Find related articles to provide context ────
+    _update_task_progress(task_id, "scraping", 5, progress_message="Buscando noticias relacionadas para comparar...")
+    related_hits = []
+    try:
+        # Use simple federated search on the title
+        related_hits = run_async(federator.search(source_article.title, max_results_per_provider=5))
+    except Exception as e:
+        logger.warning("Failed to fetch related articles during URL analysis", error=str(e))
+        
+    # We will just save them as detected articles so they appear in the UI
+    related_articles_data = []
+    for hit in related_hits[:8]: # Limit to 8
+        if normalize_url(hit.url) != normalize_url(source_article.source_url):
+            related_articles_data.append(hit)
+
     # ── Step 2: Chunking ──────────────────────────────────────
     _update_task_progress(task_id, "analyzing", 10, progress_message="Segmentando artículo en bloques semánticos...")
     chunks = segment_text_into_chunks(source_article.body, max_tokens=1500)
@@ -478,11 +531,27 @@ def _search_and_analyze_url_sync(
             author=source_article.author[:200] if source_article.author else None,
             published_at=source_article.published_at,
             is_source=True,
+            is_truncated=source_article.is_truncated,
             status=ArticleStatus.ANALYZING
         )
         session.add(db_article)
         session.flush()
         article_id = db_article.id
+        
+        # Save related articles
+        for hit in related_articles_data:
+            rel_article = Article(
+                search_task_id=search_task.id,
+                source_name=hit.source_name,
+                source_url=hit.url,
+                title=hit.title,
+                body="", # We don't fetch body yet
+                published_at=hit.published_at,
+                is_source=False,
+                status=ArticleStatus.DETECTED
+            )
+            session.add(rel_article)
+            
         session.commit()
 
     # ── Step 4: Process Chunks (parallel for external APIs) ─────
@@ -590,7 +659,30 @@ def _search_and_analyze_url_sync(
             )
         ).scalars().all()
         
-        real_bias_elements = [{"type": bf.type, "detail": bf.content} for bf in bias_facts]
+        real_bias_elements = []
+        for bf in bias_facts:
+            # Parse back "type: quote - explanation" if possible
+            content = bf.content
+            b_type = bf.type.capitalize()
+            quote = ""
+            explanation = content
+            
+            if ": " in content and " - " in content:
+                parts = content.split(": ", 1)
+                b_type = parts[0]
+                remainder = parts[1]
+                if " - " in remainder:
+                    quote, explanation = remainder.split(" - ", 1)
+                else:
+                    explanation = remainder
+                    
+            real_bias_elements.append({
+                "source": source_article.source_name,
+                "type": b_type,
+                "original_text": quote or "Texto no extraído individualmente",
+                "explanation": explanation,
+                "severity": 3  # Default severity since it's not currently extracted
+            })
         
         # Build a real summary from consolidated facts
         summary_text = ". ".join(consolidated_facts[:7]) + "." if consolidated_facts else "No se extrajeron hechos."

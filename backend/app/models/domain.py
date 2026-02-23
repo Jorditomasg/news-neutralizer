@@ -87,6 +87,7 @@ class Article(Base):
     similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # Similarity to the query or centroid
     status: Mapped[ArticleStatus] = mapped_column(Enum(ArticleStatus, native_enum=False, length=20), default=ArticleStatus.DETECTED)
     structural_reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -150,6 +151,9 @@ class SourceDomain(Base):
     trust_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0 to 100
     bias_lean: Mapped[str | None] = mapped_column(String(50), nullable=True)  # left, center, right, extreme...
     ai_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)  # Why it got this score
+    has_paywall: Mapped[bool] = mapped_column(Boolean, default=False)  # True when truncated content detected
+    paywall_hits_count: Mapped[int] = mapped_column(Integer, default=0)  # How many times paywall was detected
+    reliability_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0.0 to 1.0 combined score
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

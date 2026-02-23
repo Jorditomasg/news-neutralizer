@@ -22,6 +22,8 @@ class ExtractedArticle:
     author: str | None = None
     published_at: datetime | None = None
     topics: list[str] = field(default_factory=list)
+    is_truncated: bool = False
+    paywall_indicators: list[str] = field(default_factory=list)
 
 
 class ArticleExtractor:
@@ -49,11 +51,17 @@ class ArticleExtractor:
             response = await client.get(resolved_url)
             response.raise_for_status()
 
-        soup = BeautifulSoup(response.text, "lxml")
+        raw_html = response.text
+        soup = BeautifulSoup(raw_html, "lxml")
 
         body = self._extract_body(soup)
         if not body:
             raise ValueError(f"No se pudo extraer el contenido del artículo de: {resolved_url}")
+
+        # Paywall / truncation detection
+        from app.services.scraper.paywall_detector import PaywallDetector
+        detector = PaywallDetector()
+        is_truncated, paywall_indicators = detector.detect(body, raw_html)
 
         return ExtractedArticle(
             title=self._extract_title(soup),
@@ -63,6 +71,8 @@ class ArticleExtractor:
             author=self._extract_author(soup),
             published_at=self._extract_date(soup),
             topics=self._extract_topics(soup),
+            is_truncated=is_truncated,
+            paywall_indicators=paywall_indicators,
         )
 
     def _extract_title(self, soup: BeautifulSoup) -> str:

@@ -11,6 +11,7 @@ export interface ArticlePreview {
   author: string | null;
   published_at: string | null;
   topics: string[];
+  has_paywall?: boolean;
 }
 
 export interface Article {
@@ -27,6 +28,7 @@ export interface Article {
   bias_details: BiasDetails | null;
   cluster_id: number | null;
   is_source: boolean;
+  is_truncated?: boolean;
 }
 
 export interface BiasDetails {
@@ -83,6 +85,7 @@ export interface SearchTask {
   articles: Article[];
   analysis?: AnalysisResult | null;
   error_message?: string | null;
+  warnings?: string[];
 }
 
 export interface TaskCreated {

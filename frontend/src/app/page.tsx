@@ -20,13 +20,13 @@ export default function HomePage() {
     <div className="flex flex-col items-center pt-20 pb-16">
       {/* Hero */}
       <div className="mb-12 text-center">
-        <h1 className="font-display text-5xl font-bold tracking-tight sm:text-6xl">
+        <h1 className="font-display text-5xl font-bold tracking-tight text-gray-900 dark:text-gray-100 sm:text-6xl transition-colors">
           Descubre los{" "}
-          <span className="bg-gradient-to-r from-teal-400 to-cyan-400 bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-400 bg-clip-text text-transparent">
             hechos
           </span>
         </h1>
-        <p className="mx-auto mt-4 max-w-xl text-lg text-gray-400">
+        <p className="mx-auto mt-4 max-w-xl text-lg text-gray-600 dark:text-gray-400 transition-colors">
           Compara noticias de múltiples fuentes, detecta sesgo informativo y
           obtén un resumen neutral basado en hechos verificables.
         </p>
@@ -43,7 +43,7 @@ export default function HomePage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Escribe un tema o pega la URL de una noticia..."
-            className="w-full rounded-2xl border border-white/10 bg-white/5 px-6 py-4 text-lg text-white placeholder-gray-500 outline-none transition-all focus:border-teal-400/40 focus:bg-white/[0.07] focus:ring-2 focus:ring-teal-400/20"
+            className="w-full rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 py-4 pl-6 pr-36 text-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-sm dark:shadow-none outline-none transition-all focus:border-teal-400/50 dark:focus:border-teal-400/40 focus:bg-white hover:bg-gray-50 dark:hover:bg-white/[0.07] dark:focus:bg-white/[0.07] focus:ring-2 focus:ring-teal-500/10 dark:focus:ring-teal-400/20"
           />
           
           {/* Input Type Indicator Badge */}
@@ -52,7 +52,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={!query.trim()}
-              className="rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 px-5 py-2 text-sm font-semibold text-gray-950 transition-all hover:shadow-lg hover:shadow-teal-500/25 disabled:opacity-40 ml-2"
+              className="rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-400 px-5 py-2 text-sm font-semibold text-white dark:text-gray-950 transition-all hover:shadow-lg hover:shadow-teal-500/25 disabled:opacity-40"
             >
               {isUrl ? "Analizar URL" : "Buscar"}
             </button>
@@ -65,30 +65,30 @@ export default function HomePage() {
 
       {/* Feature Cards */}
       <div className="mt-20 grid gap-6 sm:grid-cols-3">
-        <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
+        <div className="rounded-2xl border border-gray-100 dark:border-white/5 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
           <div className="mb-3 text-2xl">📊</div>
-          <h3 className="font-display text-sm font-semibold text-white">
+          <h3 className="font-display text-sm font-semibold text-gray-900 dark:text-white transition-colors">
             Comparación multi-fuente
           </h3>
-          <p className="mt-2 text-sm text-gray-500">
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-500 transition-colors">
             Analiza cómo diferentes medios cubren la misma noticia, detectando omisiones y énfasis.
           </p>
         </div>
-        <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
+        <div className="rounded-2xl border border-gray-100 dark:border-white/5 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
           <div className="mb-3 text-2xl">🎯</div>
-          <h3 className="font-display text-sm font-semibold text-white">
+          <h3 className="font-display text-sm font-semibold text-gray-900 dark:text-white transition-colors">
             Detección de sesgo
           </h3>
-          <p className="mt-2 text-sm text-gray-500">
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-500 transition-colors">
             Identifica sensacionalismo, framing, adjetivación y otros elementos de polarización.
           </p>
         </div>
-        <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6">
+        <div className="rounded-2xl border border-gray-100 dark:border-white/5 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
           <div className="mb-3 text-2xl">✍️</div>
-          <h3 className="font-display text-sm font-semibold text-white">
+          <h3 className="font-display text-sm font-semibold text-gray-900 dark:text-white transition-colors">
             Resumen neutral
           </h3>
-          <p className="mt-2 text-sm text-gray-500">
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-500 transition-colors">
             Genera un resumen basado exclusivamente en hechos verificables, sin opinión editorial.
           </p>
         </div>

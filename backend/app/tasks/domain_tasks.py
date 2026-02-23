@@ -114,6 +114,11 @@ def discover_and_evaluate_domains(self, urls: list[str], provider_name: str = "o
                 logger.info("Domain evaluated", domain=domain, score=trust_score, bias=bias)
             session.commit()
             
+            # Calculate reliability scores for all newly evaluated domains
+            from app.services.reliability import update_domain_reliability
+            for domain in untracked:
+                update_domain_reliability(session, domain)
+            
     except Exception as e:
         logger.error("Batch domain evaluation failed, falling back to individual", error=str(e))
         # Fallback: evaluate one by one

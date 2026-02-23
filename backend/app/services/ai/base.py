@@ -73,20 +73,23 @@ class AIProvider(ABC):
         prompt = (
             "Analiza el siguiente fragmento de texto periodístico y extrae meticulosamente "
             "la información requerida en formato JSON estricto. "
-            "Tu análisis debe ser completamente exhaustivo y atómico.\n\n"
+            "Tu análisis debe ser completamente exhaustivo y atómico.\n"
+            "⚠️ IMPORTANTE: Si el texto es muy corto o parece estar cortado (ej. muro de pago), "
+            "extrae los hechos disponibles por mínimos que sean. NO devuelvas listas vacías si hay al menos un hecho en el texto.\n"
+            "⚠️ IMPORTANTE: Si no hay elementos de sesgo, afirmaciones sin verificar o framing, devuelve una lista vacía `[]`. NO devuelvas objetos vacíos como `[{\"type\": \"\", \"quote\": \"\", \"explanation\": \"\"}]`.\n\n"
             f"TEXTO:\n{chunk}\n\n"
             "Responde SOLO con un objeto JSON válido que contenga exactamente estas claves:\n"
             "{\n"
             '  "facts": ["Lista de hechos verificables o acciones concretas ocurridas. Cada uno debe ser una afirmación independiente y atómica."],\n'
-            '  "unverified_claims": ["Afirmaciones hechas por el periodista o citas de fuentes que no son hechos consolidados, sino posiciones, opiniones o declaraciones."],\n'
+            '  "unverified_claims": ["Afirmaciones o citas de fuentes que no son hechos consolidados. Usa [] si no hay ninguna."],\n'
             '  "biases": [\n'
             '    {\n'
             '      "type": "tipo de sesgo (sensacionalismo, adjetivación, victimización, etc.)",\n'
             '      "quote": "cita textual exacta donde se aprecia",\n'
             '      "explanation": "breve explicación"\n'
             '    }\n'
-            '  ],\n'
-            '  "framing": ["Descripción breve de cómo se está enmarcando la noticia en este fragmento (ej. culpabilización, heroísmo, alarma, etc.)."],\n'
+            '  ], // Usa [] si no hay ningún sesgo claro.\n'
+            '  "framing": ["Descripción breve de cómo se está enmarcando la noticia. Usa [] si no aplica."],\n'
             '  "entities": ["Lista de nombres propios, organizaciones, cargos o lugares mencionados clave."],\n'
             '  "tone": "Una palabra que defina el tono general (ej. alarmista, neutral, crítico, empático)."\n'
             "}"
