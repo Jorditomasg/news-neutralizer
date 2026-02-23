@@ -1,0 +1,97 @@
+export const es = {
+  nav: {
+    title: "News Neutralizer",
+    history: "Historial",
+    settings: "Configuración",
+    analyzed_news: "Noticias Analizadas",
+  },
+  settings: {
+    title: "Configuración",
+    description: "Configura tu modelo de IA principal y tus preferencias de análisis. Las claves API se cifran de forma segura.",
+    securityNotice: "🔒 Tienes tus claves encriptadas con Fernet (AES-128-CBC) en la BD. Por defecto se usa Ollama.",
+    provider: {
+      openai: "OpenAI",
+      openai_desc: "GPT-4o, GPT-4o-mini",
+      anthropic: "Anthropic",
+      anthropic_desc: "Claude 3.5 Sonnet",
+      google: "Google AI",
+      google_desc: "Gemini 2.0 Flash",
+      ollama: "Ollama (local)",
+      ollama_desc: "Llama 3.1, Mistral (sin API key)",
+    }
+  },
+  prefs: {
+    ai_model: "Modelo de IA",
+    ai_model_desc: "Selecciona el motor que usará el neutralizador",
+    provider: "Proveedor de IA",
+    apiKey: "API Key",
+    apiKeyPlaceholder: "Introduce tu API key...",
+    ollamaNoKey: "Ollama no requiere API Key",
+    save: "Guardar",
+    saving: "Guardando...",
+    saved: "✅ Guardado",
+    error: "❌ Error",
+    preferences: "Preferencias de Análisis",
+    preferences_desc: "Ajusta cómo la IA analiza y resume las noticias.",
+    language: "Idioma",
+    language_es: "Español",
+    language_en: "Inglés",
+    summaryLength: "Longitud del resumen",
+    summaryLength_short: "Corto",
+    summaryLength_medium: "Medio",
+    summaryLength_long: "Detallado",
+    biasStrictness: "Exigencia del sesgo",
+    biasStrictness_standard: "Estándar",
+    biasStrictness_strict: "Estricto",
+  }
+};
+
+export const en: typeof es = {
+  nav: {
+    title: "News Neutralizer",
+    history: "History",
+    settings: "Settings",
+    analyzed_news: "Analyzed News",
+  },
+  settings: {
+    title: "Settings",
+    description: "Configure your primary AI model and analysis preferences. API keys are safely encrypted.",
+    securityNotice: "🔒 Your keys are encrypted with Fernet (AES-128-CBC) in the DB. Ollama is used by default.",
+    provider: {
+      openai: "OpenAI",
+      openai_desc: "GPT-4o, GPT-4o-mini",
+      anthropic: "Anthropic",
+      anthropic_desc: "Claude 3.5 Sonnet",
+      google: "Google AI",
+      google_desc: "Gemini 2.0 Flash",
+      ollama: "Ollama (local)",
+      ollama_desc: "Llama 3.1, Mistral (no API key)",
+    }
+  },
+  prefs: {
+    ai_model: "AI Model",
+    ai_model_desc: "Select the engine to use for neutralization",
+    provider: "AI Provider",
+    apiKey: "API Key",
+    apiKeyPlaceholder: "Enter your API key...",
+    ollamaNoKey: "Ollama doesn't require an API Key",
+    save: "Save",
+    saving: "Saving...",
+    saved: "✅ Saved",
+    error: "❌ Error",
+    preferences: "Analysis Preferences",
+    preferences_desc: "Adjust how the AI analyzes and summarizes news.",
+    language: "Language",
+    language_es: "Spanish",
+    language_en: "English",
+    summaryLength: "Summary Length",
+    summaryLength_short: "Short",
+    summaryLength_medium: "Medium",
+    summaryLength_long: "Detailed",
+    biasStrictness: "Bias Strictness",
+    biasStrictness_standard: "Standard",
+    biasStrictness_strict: "Strict",
+  }
+};
+
+export type Translations = typeof es;

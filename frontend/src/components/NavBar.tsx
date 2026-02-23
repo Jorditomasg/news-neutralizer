@@ -4,11 +4,13 @@ import Link from "next/link";
 import { NotificationCenter } from "@/components/NotificationCenter";
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "@/components/ThemeProvider";
+import { useI18n } from "@/context/I18nContext";
 
 export function NavBar() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { theme, toggleTheme } = useTheme();
+  const { t } = useI18n();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -41,7 +43,7 @@ export function NavBar() {
             </svg>
           </div>
           <span className="font-display text-lg font-bold tracking-tight text-gray-900 dark:text-white transition-colors">
-            News Neutralizer
+            {t.nav.title}
           </span>
         </Link>
 
@@ -53,7 +55,7 @@ export function NavBar() {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            Noticias Analizadas
+            {t.nav.analyzed_news}
           </Link>
           <Link
             href="/generated"
@@ -73,8 +75,8 @@ export function NavBar() {
               <button
                 onClick={() => setIsSettingsOpen(!isSettingsOpen)}
                 className={`p-2 transition-colors rounded-lg ${isSettingsOpen ? "bg-gray-200 text-gray-900 dark:bg-white/10 dark:text-white" : "text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/5"}`}
-                aria-label="Menú de configuración"
-                title="Configuración"
+                aria-label={t.nav.settings}
+                title={t.nav.settings}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -118,7 +120,7 @@ export function NavBar() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
-                    Configuración
+                    {t.nav.settings}
                   </Link>
                 </div>
               )}

@@ -11,8 +11,8 @@ logger = structlog.get_logger()
 class AnthropicProvider(AIProvider):
     """Anthropic Claude provider."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
-        super().__init__(api_key)
+    def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514", **kwargs):
+        super().__init__(api_key=api_key, **kwargs)
         self._client = AsyncAnthropic(api_key=api_key)
         self._model = model
 
@@ -34,7 +34,7 @@ class AnthropicProvider(AIProvider):
         raise NotImplementedError("Anthropic does not provide embeddings. Use local sentence-transformers.")
 
     def validate_key(self) -> bool:
-        return bool(self._api_key and self._api_key.startswith("sk-ant-"))
+        return bool(self.api_key and self.api_key.startswith("sk-ant-"))
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         # Claude 3.5 Sonnet pricing (approximate)

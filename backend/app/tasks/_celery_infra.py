@@ -43,9 +43,9 @@ def run_async(coro):
         loop.close()
 
 
-def get_ai_provider(provider_name: str, encrypted_api_key: str | None):
+def get_ai_provider(provider_name: str, encrypted_api_key: str | None, language: str = "es", summary_length: str = "medium", bias_strictness: str = "standard"):
     """Create an AI provider instance, decrypting the API key if provided."""
     api_key = None
     if encrypted_api_key:
         api_key = decrypt_api_key(encrypted_api_key)
-    return AIProviderFactory.get(provider_name, api_key=api_key)
+    return AIProviderFactory.get(provider_name, api_key=api_key, language=language, summary_length=summary_length, bias_strictness=bias_strictness)

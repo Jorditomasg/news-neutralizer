@@ -11,9 +11,10 @@ logger = structlog.get_logger()
 class GoogleProvider(AIProvider):
     """Google Gemini provider."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
-        super().__init__(api_key)
-        genai.configure(api_key=api_key)
+    def __init__(self, api_key: str | None = None, model: str = "gemini-2.0-flash", **kwargs):
+        super().__init__(api_key=api_key, **kwargs)
+        if api_key:
+            genai.configure(api_key=api_key)
         self._model = genai.GenerativeModel(model)
 
     @property
@@ -39,7 +40,7 @@ class GoogleProvider(AIProvider):
         return result["embedding"] if isinstance(result["embedding"][0], list) else [result["embedding"]]
 
     def validate_key(self) -> bool:
-        return bool(self._api_key and len(self._api_key) > 10)
+        return bool(self.api_key and len(self.api_key) > 10)
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         # Gemini 2.0 Flash pricing (very affordable)

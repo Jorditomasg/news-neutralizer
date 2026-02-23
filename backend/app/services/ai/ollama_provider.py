@@ -15,8 +15,8 @@ logger = structlog.get_logger()
 class OllamaProvider(AIProvider):
     """Ollama local model provider (self-hosted, no API key)."""
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None):
-        super().__init__(api_key)
+    def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None, **kwargs):
+        super().__init__(api_key=api_key, **kwargs)
         from app.config import settings
         self._model = model or settings.ollama_model
         self._base_url = base_url or settings.ollama_url

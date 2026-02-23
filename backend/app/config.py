@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
 
     # ── Encryption (Fernet key for user API keys) ─────────────
-    encryption_key: str = "changeme_generate_a_real_fernet_key"
+    encryption_key: str = "TjQ5cEVIblpYV1lZTEpKZ09DdUQxaVptc1ZqT203eXc="
 
     # ── CORS ──────────────────────────────────────────────────
     cors_origins: str = "http://localhost:3000"

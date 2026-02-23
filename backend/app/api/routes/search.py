@@ -3,7 +3,7 @@
 import uuid
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -86,9 +86,12 @@ async def _check_topic_specificity_fast(db: AsyncSession, topic: str) -> dict | 
     return None
 
 
+from fastapi import Request
+
 @router.post("/", response_model=TaskCreated)
 async def search_news(
     request: SearchRequest,
+    req: Request,
     db: AsyncSession = Depends(get_db),
     session_id: str = Depends(get_session_id),
 ):
@@ -99,6 +102,11 @@ async def search_news(
     """
     task_id = str(uuid.uuid4())
     is_url_input = _is_url(request.query)
+
+    # Extract user preferences from headers
+    language = req.headers.get("Accept-Language", "es")
+    summary_length = req.headers.get("X-Summary-Length", "medium")
+    bias_strictness = req.headers.get("X-Bias-Strictness", "standard")
 
     # Create search task record
     search_task = SearchTask(
@@ -138,6 +146,9 @@ async def search_news(
             source_slugs=request.sources,
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
+            language=language,
+            summary_length=summary_length,
+            bias_strictness=bias_strictness,
         )
     else:
         # Topic mode: Fast heuristic + cache check (non-blocking)
@@ -155,6 +166,9 @@ async def search_news(
             source_slugs=request.sources,
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
+            language=language,
+            summary_length=summary_length,
+            bias_strictness=bias_strictness,
         )
 
     return TaskCreated(task_id=task_id)

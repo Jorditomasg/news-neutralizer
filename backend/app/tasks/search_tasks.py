@@ -152,14 +152,16 @@ def _copy_cached_result_to_task(session: Session, new_task_id: str, cached_resul
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
 def search_and_analyze(self, task_id: str, query: str, source_slugs: list | None = None,
-                       provider_name: str = "openai", encrypted_api_key: str | None = None):
+                       provider_name: str = "openai", encrypted_api_key: str | None = None,
+                       language: str = "es", summary_length: str = "medium", bias_strictness: str = "standard"):
     """
     Full pipeline: search → scrape → analyze → save.
     This is the main Celery task for topic-based search.
     """
     try:
         _search_and_analyze_sync(
-            task_id, query, source_slugs, provider_name, encrypted_api_key
+            task_id, query, source_slugs, provider_name, encrypted_api_key,
+            language, summary_length, bias_strictness
         )
     except Exception as exc:
         logger.error("Task failed", task_id=task_id, error=str(exc))
@@ -172,7 +174,8 @@ def search_and_analyze(self, task_id: str, query: str, source_slugs: list | None
 
 def _search_and_analyze_sync(
     task_id: str, query: str, source_slugs: list | None,
-    provider_name: str, encrypted_api_key: str | None
+    provider_name: str, encrypted_api_key: str | None,
+    language: str, summary_length: str, bias_strictness: str
 ):
     """Synchronous implementation of the topic-based pipeline."""
     import hashlib
@@ -214,7 +217,7 @@ def _search_and_analyze_sync(
 
     if not topic_is_cached:
         try:
-            provider = get_ai_provider(provider_name, encrypted_api_key)
+            provider = get_ai_provider(provider_name, encrypted_api_key, language, summary_length, bias_strictness)
             ai_result = run_async(provider.evaluate_topic_specificity(query))
 
             # Cache the result
@@ -386,7 +389,7 @@ def _search_and_analyze_sync(
 
     try:
         _update_task_progress(task_id, "analyzing", 65)
-        provider = get_ai_provider(provider_name, encrypted_api_key)
+        provider = get_ai_provider(provider_name, encrypted_api_key, language, summary_length, bias_strictness)
         analysis = run_async(provider.analyze_articles(articles_for_ai))
     except Exception as e:
         error_msg = f"Error en análisis AI ({provider_name}): {str(e)[:500]}"
@@ -413,14 +416,16 @@ def _search_and_analyze_sync(
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
 def search_and_analyze_url(self, task_id: str, url: str, original_query: str | None = None, source_slugs: list | None = None,
-                           provider_name: str = "openai", encrypted_api_key: str | None = None):
+                           provider_name: str = "openai", encrypted_api_key: str | None = None,
+                           language: str = "es", summary_length: str = "medium", bias_strictness: str = "standard"):
     """
     URL pipeline: extract source article → semantic query → search related → analyze.
     Falls back to solo-article analysis if no related articles are found.
     """
     try:
         _search_and_analyze_url_sync(
-            task_id, url, original_query, source_slugs, provider_name, encrypted_api_key
+            task_id, url, original_query, source_slugs, provider_name, encrypted_api_key,
+            language, summary_length, bias_strictness
         )
     except Exception as exc:
         logger.error("URL task failed", task_id=task_id, error=str(exc))
@@ -433,7 +438,8 @@ def search_and_analyze_url(self, task_id: str, url: str, original_query: str | N
 
 def _search_and_analyze_url_sync(
     task_id: str, url: str, original_query: str | None, source_slugs: list | None,
-    provider_name: str, encrypted_api_key: str | None
+    provider_name: str, encrypted_api_key: str | None,
+    language: str, summary_length: str, bias_strictness: str
 ):
     """Synchronous implementation of the URL-based pipeline (Fact-Based Analysis)."""
     from app.services.scraper.extractor import ArticleExtractor
@@ -447,7 +453,7 @@ def _search_and_analyze_url_sync(
 
     extractor = ArticleExtractor()
     federator = FederatedSearchEngine()
-    provider = get_ai_provider(provider_name, encrypted_api_key)
+    provider = get_ai_provider(provider_name, encrypted_api_key, language, summary_length, bias_strictness)
 
     # ── Step 1: Extract source article from URL ───────────────
     _update_task_progress(task_id, "scraping", 0, progress_message="Descargando contenido del artículo...")
@@ -546,7 +552,7 @@ def _search_and_analyze_url_sync(
                 source_url=hit.url,
                 title=hit.title,
                 body="", # We don't fetch body yet
-                published_at=hit.published_at,
+                published_at=hit.published_date,
                 is_source=False,
                 status=ArticleStatus.DETECTED
             )

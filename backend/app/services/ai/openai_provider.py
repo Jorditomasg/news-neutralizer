@@ -11,8 +11,8 @@ logger = structlog.get_logger()
 class OpenAIProvider(AIProvider):
     """OpenAI GPT provider (GPT-4o, GPT-4o-mini, etc.)."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
-        super().__init__(api_key)
+    def __init__(self, api_key: str | None = None, model: str = "gpt-4o", **kwargs):
+        super().__init__(api_key=api_key, **kwargs)
         self._client = AsyncOpenAI(api_key=api_key)
         self._model = model
 
@@ -41,7 +41,7 @@ class OpenAIProvider(AIProvider):
         return [item.embedding for item in response.data]
 
     def validate_key(self) -> bool:
-        return bool(self._api_key and self._api_key.startswith("sk-"))
+        return bool(self.api_key and self.api_key.startswith("sk-"))
 
     def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
         # GPT-4o pricing (approximate, may change)

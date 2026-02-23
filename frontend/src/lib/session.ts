@@ -39,8 +39,21 @@ export function getSessionId(): string {
  * Returns common headers including the session ID.
  */
 export function sessionHeaders(): Record<string, string> {
-  return {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Session-ID": getSessionId(),
   };
+
+  if (typeof window !== "undefined") {
+    const lang = localStorage.getItem("app_lang");
+    if (lang) headers["Accept-Language"] = lang;
+
+    const summaryLen = localStorage.getItem("app_summary_length");
+    if (summaryLen) headers["X-Summary-Length"] = summaryLen;
+
+    const biasStr = localStorage.getItem("app_bias_strictness");
+    if (biasStr) headers["X-Bias-Strictness"] = biasStr;
+  }
+
+  return headers;
 }

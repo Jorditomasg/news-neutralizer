@@ -20,13 +20,22 @@ async def save_api_key(
 ):
     """Save or update a user's API key (encrypted at rest)."""
 
-    # Check if key already exists for this provider
+    # Find if the key already exists for this provider
     stmt = select(UserAPIKey).where(
         UserAPIKey.session_id == session_id,
         UserAPIKey.provider == request.provider,
     )
     result = await db.execute(stmt)
     existing = result.scalar_one_or_none()
+
+    # Enforce a single provider per session: delete keys for other providers
+    delete_others_stmt = select(UserAPIKey).where(
+        UserAPIKey.session_id == session_id,
+        UserAPIKey.provider != request.provider,
+    )
+    others_result = await db.execute(delete_others_stmt)
+    for other_key in others_result.scalars().all():
+        await db.delete(other_key)
 
     encrypted = encrypt_api_key(request.api_key)
 

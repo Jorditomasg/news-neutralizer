@@ -5,6 +5,7 @@ import { TaskProvider } from "@/context/TaskContext";
 import { GlobalTaskTracker } from "@/components/GlobalTaskTracker";
 import { NavBar } from "@/components/NavBar";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { I18nProvider } from "@/context/I18nContext";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -41,8 +42,13 @@ export default function RootLayout({
                 } else if (storedTheme === 'light') {
                   document.documentElement.classList.remove('dark');
                 } else {
-                  // Default to light
-                  document.documentElement.classList.remove('dark');
+                  // Default to browser preference
+                  const isDarkMode = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+                  if (isDarkMode) {
+                    document.documentElement.classList.add('dark');
+                  } else {
+                    document.documentElement.classList.remove('dark');
+                  }
                 }
               } catch (err) {}
             `,
@@ -52,16 +58,17 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${spaceGrotesk.variable} font-sans antialiased`}
       >
-        <ThemeProvider>
+        <I18nProvider>
+          <ThemeProvider>
           <TaskProvider>
-            <div className="flex flex-col min-h-screen bg-gradient-to-br from-gray-50 via-gray-100 to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-300">
+            <div className="bg-gradient-to-br from-gray-50 via-gray-100 to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-300 flex-1 flex flex-col">
               <NavBar />
 
               {/* Main Content */}
               <main className="flex-1 w-full mx-auto max-w-7xl px-6 py-10">{children}</main>
 
               {/* Footer */}
-              <footer className="border-t border-gray-200 dark:border-white/5 py-8 text-center text-xs text-gray-500 dark:text-gray-600 transition-colors duration-300">
+              <footer className="border-t border-gray-200 dark:border-white/5 py-8 text-center text-xs text-gray-500 dark:text-gray-600 transition-colors duration-300 mt-auto">
                 <p>
                   News Neutralizer — Herramienta de análisis. Los resultados son
                   orientativos, no verdades absolutas.
@@ -71,6 +78,7 @@ export default function RootLayout({
             <GlobalTaskTracker />
           </TaskProvider>
         </ThemeProvider>
+        </I18nProvider>
       </body>
     </html>
   );

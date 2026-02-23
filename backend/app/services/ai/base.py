@@ -39,8 +39,11 @@ class AIProvider(ABC):
     Each provider must implement all abstract methods.
     """
 
-    def __init__(self, api_key: str | None = None):
-        self._api_key = api_key
+    def __init__(self, api_key: str | None = None, language: str = "es", summary_length: str = "medium", bias_strictness: str = "standard"):
+        self.api_key = api_key
+        self.language = language
+        self.summary_length = summary_length
+        self.bias_strictness = bias_strictness
 
     @property
     @abstractmethod
@@ -70,10 +73,20 @@ class AIProvider(ABC):
 
     async def extract_facts_from_chunk(self, chunk: str) -> "ExtractedFactsResult":
         """Extract structured facts and bias info from a chunk of text."""
+        lang_instruction = "Escribe ÚNICAMENTE EN ESPAÑOL." if self.language == "es" else "Write EVERYTHING in ENGLISH."
+        
+        bias_map = {
+            "standard": "Fíltralo y solo devuelve sesgos extremadamente evidentes y graves.",
+            "strict": "Detecta absolutamente todas las tácticas de manipulación: encuadre, victimización, adjetivación y jerga partidista leve.",
+        }
+        bias_instruction = bias_map.get(self.bias_strictness, bias_map["standard"])
+
         prompt = (
             "Analiza el siguiente fragmento de texto periodístico y extrae meticulosamente "
             "la información requerida en formato JSON estricto. "
             "Tu análisis debe ser completamente exhaustivo y atómico.\n"
+            f"⚠️ INSTRUCCIÓN DE IDIOMA: {lang_instruction}\n"
+            f"⚠️ RIGUR DE SESGO: {bias_instruction}\n"
             "⚠️ IMPORTANTE: Si el texto es muy corto o parece estar cortado (ej. muro de pago), "
             "extrae los hechos disponibles por mínimos que sean. NO devuelvas listas vacías si hay al menos un hecho en el texto.\n"
             "⚠️ IMPORTANTE: Si no hay elementos de sesgo, afirmaciones sin verificar o framing, devuelve una lista vacía `[]`. NO devuelvas objetos vacíos como `[{\"type\": \"\", \"quote\": \"\", \"explanation\": \"\"}]`.\n\n"
@@ -452,12 +465,33 @@ class AIProvider(ABC):
             articles_text += f"Título: {article.get('title', '')}\n"
             articles_text += f"Texto: {article.get('body', '')[:1500]}\n"
 
+        lang_instruction = "Responde estrictamente en ESPAÑOL." if self.language == "es" else "Responde estrictamente en INGLÉS (ENGLISH)."
+        
+        len_map = {
+            "short": "Resumen muy breve y conciso de 50-100 palabras",
+            "medium": "Resumen estándar de 200-300 palabras",
+            "long": "Resumen detallado de 400-500 palabras",
+        }
+        len_instruction = len_map.get(self.summary_length, len_map["medium"])
+
+        bias_map = {
+            "standard": "Detecta únicamente sesgos obvios, sensacionalismo claro o palabras marcadamente subjetivas.",
+            "strict": "Sé extremadamente meticuloso. Detecta cualquier mínima adjetivación innecesaria, encuadre sutil, omisión de contexto y favoritismo ideológico leve.",
+        }
+        bias_instruction = bias_map.get(self.bias_strictness, bias_map["standard"])
+
         return f"""Analiza estos artículos sobre el mismo tema. Detecta sesgos y redacta un resumen neutral.
 
 INSTRUCCIÓN CRÍTICA:
 Si un artículo está marcado como [MAIN_SOURCE_TO_ANALYZE], tu 'topic_summary', 'objective_facts' y 'neutralized_summary' DEBEN centrarse EXCLUSIVAMENTE en la noticia o evento reportado en ese artículo principal.
 Los artículos marcados como [RELATED_CONTEXT] solo deben usarse para comparar, detectar qué información omitió el artículo principal, contrastar titulares y calcular el sesgo. 
 Bajo NINGUNA circunstancia debes resumir o incluir información de los [RELATED_CONTEXT] que no tenga relación directa y explícita con el evento del [MAIN_SOURCE_TO_ANALYZE]. Si los artículos relacionados hablan de un tema distinto (incluso si son la noticia global del día), IGNÓRALOS por completo y basa tu respuesta solo en el principal.
+
+{lang_instruction}
+
+PREFERENCIAS DEL USUARIO:
+- Longitud del resumen: {len_instruction}
+- Nivel de rigor en detección de sesgos: {bias_instruction}
 
 {articles_text}
 
@@ -475,7 +509,7 @@ Responde SOLO con JSON válido con esta estructura:
       "severity": 3
     }}
   ],
-  "neutralized_summary": "Resumen neutral de 200-300 palabras centrado en la noticia principal. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
+  "neutralized_summary": "{len_instruction} centrado en la noticia principal. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
   "source_bias_scores": {{
     "nombre del medio": {{"score": 0.5, "direction": "izquierda|centro|derecha", "confidence": 0.7}}
   }}
