@@ -73,38 +73,38 @@ class AIProvider(ABC):
 
     async def extract_facts_from_chunk(self, chunk: str) -> "ExtractedFactsResult":
         """Extract structured facts and bias info from a chunk of text."""
-        lang_instruction = "Escribe ÚNICAMENTE EN ESPAÑOL." if self.language == "es" else "Write EVERYTHING in ENGLISH."
+        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
         
         bias_map = {
-            "standard": "Fíltralo y solo devuelve sesgos extremadamente evidentes y graves.",
-            "strict": "Detecta absolutamente todas las tácticas de manipulación: encuadre, victimización, adjetivación y jerga partidista leve.",
+            "standard": "Filter it and only return extremely obvious and severe biases.",
+            "strict": "Detect absolutely all manipulation tactics: framing, victimization, adjectivation, and mild partisan jargon.",
         }
         bias_instruction = bias_map.get(self.bias_strictness, bias_map["standard"])
 
         prompt = (
-            "Analiza el siguiente fragmento de texto periodístico y extrae meticulosamente "
-            "la información requerida en formato JSON estricto. "
-            "Tu análisis debe ser completamente exhaustivo y atómico.\n"
-            f"⚠️ INSTRUCCIÓN DE IDIOMA: {lang_instruction}\n"
-            f"⚠️ RIGUR DE SESGO: {bias_instruction}\n"
-            "⚠️ IMPORTANTE: Si el texto es muy corto o parece estar cortado (ej. muro de pago), "
-            "extrae los hechos disponibles por mínimos que sean. NO devuelvas listas vacías si hay al menos un hecho en el texto.\n"
-            "⚠️ IMPORTANTE: Si no hay elementos de sesgo, afirmaciones sin verificar o framing, devuelve una lista vacía `[]`. NO devuelvas objetos vacíos como `[{\"type\": \"\", \"quote\": \"\", \"explanation\": \"\"}]`.\n\n"
-            f"TEXTO:\n{chunk}\n\n"
-            "Responde SOLO con un objeto JSON válido que contenga exactamente estas claves:\n"
+            "Analyze the following journalistic text snippet and meticulously extract "
+            "the required information in strict JSON format. "
+            "Your analysis must be completely exhaustive and atomic.\n"
+            f"⚠️ LANGUAGE INSTRUCTION: {lang_instruction}\n"
+            f"⚠️ BIAS STRICTNESS: {bias_instruction}\n"
+            "⚠️ IMPORTANT: If the text is very short or seems cut off (e.g., paywall), "
+            "extract the available facts no matter how minimal. DO NOT return empty lists if there is at least one fact in the text.\n"
+            "⚠️ IMPORTANT: If there are no bias elements, unverified claims, or framing, return an empty list `[]`. DO NOT return empty objects like `[{\"type\": \"\", \"quote\": \"\", \"explanation\": \"\"}]`.\n\n"
+            f"TEXT:\n{chunk}\n\n"
+            "Respond ONLY with a valid JSON object containing exactly these keys:\n"
             "{\n"
-            '  "facts": ["Lista de hechos verificables o acciones concretas ocurridas. Cada uno debe ser una afirmación independiente y atómica."],\n'
-            '  "unverified_claims": ["Afirmaciones o citas de fuentes que no son hechos consolidados. Usa [] si no hay ninguna."],\n'
+            '  "facts": ["List of verifiable facts or concrete actions that occurred. Each must be an independent and atomic statement."],\n'
+            '  "unverified_claims": ["Claims or quotes from sources that are not consolidated facts. Use [] if there are none."],\n'
             '  "biases": [\n'
             '    {\n'
-            '      "type": "tipo de sesgo (sensacionalismo, adjetivación, victimización, etc.)",\n'
-            '      "quote": "cita textual exacta donde se aprecia",\n'
-            '      "explanation": "breve explicación"\n'
+            '      "type": "type of bias (sensationalism, adjectivation, victimization, etc.)",\n'
+            '      "quote": "exact exact quote where it is seen",\n'
+            '      "explanation": "brief explanation"\n'
             '    }\n'
-            '  ], // Usa [] si no hay ningún sesgo claro.\n'
-            '  "framing": ["Descripción breve de cómo se está enmarcando la noticia. Usa [] si no aplica."],\n'
-            '  "entities": ["Lista de nombres propios, organizaciones, cargos o lugares mencionados clave."],\n'
-            '  "tone": "Una palabra que defina el tono general (ej. alarmista, neutral, crítico, empático)."\n'
+            '  ], // Use [] if there is no clear bias.\n'
+            '  "framing": ["Brief description of how the news is being framed. Use [] if not applicable."],\n'
+            '  "entities": ["List of key proper names, organizations, roles, or places mentioned."],\n'
+            '  "tone": "A single word defining the overall tone (e.g., alarmist, neutral, critical, empathetic)."\n'
             "}"
         )
         response = await self.analyze(prompt, max_tokens=2000)
@@ -124,20 +124,22 @@ class AIProvider(ABC):
         if not facts:
             return []
             
+        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
         facts_text = "\n".join([f"- {f}" for f in facts])
         prompt = (
-            "A continuación tienes una lista de hechos extraídos de diferentes fragmentos "
-            "de un mismo artículo periodístico. Tu tarea es eliminar duplicados exactos "
-            "o redundancias, combinando información si es necesario, para producir una "
-            "lista consolidada, atómica y exhaustiva de los hechos.\n\n"
-            f"HECHOS ORIGINALES:\n{facts_text}\n\n"
-            "Responde SOLO con un objeto JSON válido que contenga la clave 'consolidated_facts' "
-            "cuyo valor sea una lista de strings con los hechos consolidados.\n"
-            "Ejemplo de formato de respuesta:\n"
+            "Below is a list of facts extracted from different snippets "
+            "of the same journalistic article. Your task is to remove exact duplicates "
+            "or redundancies, combining information if necessary, to produce a "
+            "consolidated, atomic, and exhaustive list of facts.\n"
+            f"⚠️ LANGUAGE INSTRUCTION: {lang_instruction}\n\n"
+            f"ORIGINAL FACTS:\n{facts_text}\n\n"
+            "Respond ONLY with a valid JSON object containing the key 'consolidated_facts' "
+            "whose value is a list of strings with the consolidated facts.\n"
+            "Example response format:\n"
             "{\n"
             '  "consolidated_facts": [\n'
-            '    "Hecho 1",\n'
-            '    "Hecho 2"\n'
+            '    "Fact 1",\n'
+            '    "Fact 2"\n'
             '  ]\n'
             "}"
         )
@@ -399,17 +401,19 @@ class AIProvider(ABC):
         Evaluate if a topic is specific enough for a focused analysis.
         Returns: {"is_specific": bool, "reason": str}
         """
+        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
         prompt = (
-            f"Analiza si el siguiente tema de búsqueda es lo suficientemente ESPECÍFICO para buscar noticias concretas sobre un evento reciente, o si es demasiado genérico/ambiguo/amplio.\n\n"
-            f"Tema: \"{topic}\"\n\n"
-            "Reglas:\n"
-            "1. Es ESPECÍFICO si se refiere a un evento concreto, una elección, un partido en un contexto, una ley, una polémica reciente, etc. (Ej: \"Resultados elecciones catalanas 2024\", \"Ley de amnistía aprobación\", \"Polémica cartel Semana Santa Sevilla\").\n"
-            "2. Es GENÉRICO si es una sola palabra amplia, un concepto abstracto, o un tema sin contexto temporal o factual claro. (Ej: \"Política\", \"Economía\", \"Fútbol\", \"Noticias\", \"España\", \"Guerra\").\n"
-            "3. Si es genérico, DEBE ser rechazado.\n\n"
-            "Responde SOLO con un JSON válido:\n"
+            f"Analyze if the following search topic is SPECIFIC enough to search for concrete news about a recent event, or if it is too generic/ambiguous/broad.\n\n"
+            f"Topic: \"{topic}\"\n\n"
+            "Rules:\n"
+            "1. It is SPECIFIC if it refers to a concrete event, an election, a match in context, a law, a recent controversy, etc. (E.g., \"Catalan election results 2024\", \"Amnesty law approval\", \"Seville Holy Week poster controversy\").\n"
+            "2. It is GENERIC if it is a single broad word, an abstract concept, or a topic without a clear temporal or factual context. (E.g., \"Politics\", \"Economy\", \"Football\", \"News\", \"Spain\", \"War\").\n"
+            "3. If it is generic, it MUST be rejected.\n\n"
+            f"⚠️ LANGUAGE INSTRUCTION: {lang_instruction}\n"
+            "Respond ONLY with a valid JSON:\n"
             "{\n"
             "  \"is_specific\": boolean,\n"
-            "  \"reason\": \"Breve explicación de por qué es específico o por qué es demasiado amplio (max 1 frase). Si es amplio, sugiere qué tipo de detalle falta.\"\n"
+            "  \"reason\": \"Brief explanation of why it is specific or why it is too broad (max 1 sentence). If it's broad, suggest what kind of detail is missing.\"\n"
             "}"
         )
         response = await self.analyze(prompt, max_tokens=200)
@@ -439,13 +443,15 @@ class AIProvider(ABC):
         Generate a semantic search query from an article's headline and body.
         Returns a focused 5-8 word phrase capturing the specific event.
         """
+        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
         prompt = (
-            f"Titular: {title}\n"
-            f"Texto: {body_preview[:500]}\n\n"
-            "Genera una frase de búsqueda de 5 a 8 palabras que capture el EVENTO o DEBATE "
-            "específico de esta noticia. NO uses nombres de personas ni partidos políticos. "
-            "Céntrate en la acción, el tema concreto y el contexto.\n"
-            "Responde SOLO con la frase, sin comillas ni explicaciones."
+            f"Headline: {title}\n"
+            f"Text: {body_preview[:500]}\n\n"
+            "Generate a search phrase of 5 to 8 words that captures the specific EVENT or DEBATE "
+            "of this news. DO NOT use names of people or political parties. "
+            "Focus on the action, the concrete topic, and the context.\n"
+            f"⚠️ LANGUAGE INSTRUCTION: {lang_instruction}\n"
+            "Respond ONLY with the phrase, without quotes or explanations."
         )
         result = await self.analyze(prompt, max_tokens=100)
         # Clean up: take just the first line, strip quotes/whitespace
@@ -465,54 +471,54 @@ class AIProvider(ABC):
             articles_text += f"Título: {article.get('title', '')}\n"
             articles_text += f"Texto: {article.get('body', '')[:1500]}\n"
 
-        lang_instruction = "Responde estrictamente en ESPAÑOL." if self.language == "es" else "Responde estrictamente en INGLÉS (ENGLISH)."
+        lang_instruction = "Respond strictly in SPANISH." if self.language == "es" else "Respond strictly in ENGLISH."
         
         len_map = {
-            "short": "Resumen muy breve y conciso de 50-100 palabras",
-            "medium": "Resumen estándar de 200-300 palabras",
-            "long": "Resumen detallado de 400-500 palabras",
+            "short": "Very brief and concise summary of 50-100 words",
+            "medium": "Standard summary of 200-300 words",
+            "long": "Detailed summary of 400-500 words",
         }
         len_instruction = len_map.get(self.summary_length, len_map["medium"])
 
         bias_map = {
-            "standard": "Detecta únicamente sesgos obvios, sensacionalismo claro o palabras marcadamente subjetivas.",
-            "strict": "Sé extremadamente meticuloso. Detecta cualquier mínima adjetivación innecesaria, encuadre sutil, omisión de contexto y favoritismo ideológico leve.",
+            "standard": "Detect only obvious biases, clear sensationalism, or markedly subjective words.",
+            "strict": "Be extremely meticulous. Detect any minimal unnecessary adjectivation, subtle framing, omission of context, and mild ideological favoritism.",
         }
         bias_instruction = bias_map.get(self.bias_strictness, bias_map["standard"])
 
-        return f"""Analiza estos artículos sobre el mismo tema. Detecta sesgos y redacta un resumen neutral.
+        return f"""Analyze these articles about the same topic. Detect biases and write a neutral summary.
 
-INSTRUCCIÓN CRÍTICA:
-Si un artículo está marcado como [MAIN_SOURCE_TO_ANALYZE], tu 'topic_summary', 'objective_facts' y 'neutralized_summary' DEBEN centrarse EXCLUSIVAMENTE en la noticia o evento reportado en ese artículo principal.
-Los artículos marcados como [RELATED_CONTEXT] solo deben usarse para comparar, detectar qué información omitió el artículo principal, contrastar titulares y calcular el sesgo. 
-Bajo NINGUNA circunstancia debes resumir o incluir información de los [RELATED_CONTEXT] que no tenga relación directa y explícita con el evento del [MAIN_SOURCE_TO_ANALYZE]. Si los artículos relacionados hablan de un tema distinto (incluso si son la noticia global del día), IGNÓRALOS por completo y basa tu respuesta solo en el principal.
+CRITICAL INSTRUCTION:
+If an article is marked as [MAIN_SOURCE_TO_ANALYZE], your 'topic_summary', 'objective_facts', and 'neutralized_summary' MUST focus EXCLUSIVELY on the news or event reported in that main article.
+Articles marked as [RELATED_CONTEXT] should only be used to compare, detect what information the main article omitted, contrast headlines, and calculate bias.
+Under NO circumstances should you summarize or include information from the [RELATED_CONTEXT] that is not directly and explicitly related to the event of the [MAIN_SOURCE_TO_ANALYZE]. If the related articles talk about a different topic (even if it's the global news of the day), completely IGNORE them and base your response only on the main one.
 
 {lang_instruction}
 
-PREFERENCIAS DEL USUARIO:
-- Longitud del resumen: {len_instruction}
-- Nivel de rigor en detección de sesgos: {bias_instruction}
+USER PREFERENCES:
+- Summary length: {len_instruction}
+- Bias detection strictness: {bias_instruction}
 
 {articles_text}
 
-Responde SOLO con JSON válido con esta estructura:
+Respond ONLY with valid JSON with this structure:
 
 {{
-  "topic_summary": "Descripción del tema en 2-3 frases centrada en la noticia principal",
-  "objective_facts": ["hecho 1", "hecho 2", "hecho 3", "hecho 4", "hecho 5"],
+  "topic_summary": "Description of the topic in 2-3 sentences focused on the main news",
+  "objective_facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"],
   "bias_elements": [
     {{
-      "source": "nombre del medio",
-      "type": "sensacionalismo|omisión|framing|adjetivación",
-      "original_text": "cita textual breve",
-      "explanation": "por qué es sesgo",
+      "source": "media name",
+      "type": "sensationalism|omission|framing|adjectivation",
+      "original_text": "brief exact quote",
+      "explanation": "why it is bias",
       "severity": 3
     }}
   ],
-  "neutralized_summary": "{len_instruction} centrado en la noticia principal. Solo hechos verificados, sin opiniones ni adjetivos valorativos. Incluye datos y citas textuales entre comillas.",
+  "neutralized_summary": "{len_instruction} focused on the main news. Only verified facts, without opinions or evaluative adjectives. Include data and exact quotes between quotation marks.",
   "source_bias_scores": {{
-    "nombre del medio": {{"score": 0.5, "direction": "izquierda|centro|derecha", "confidence": 0.7}}
+    "media name": {{"score": 0.5, "direction": "left|center|right", "confidence": 0.7}}
   }}
 }}
 
-IMPORTANTE: El JSON debe ser válido. Usa comillas dobles. No incluyas texto fuera del JSON."""
+IMPORTANT: The JSON must be valid. Use double quotes. Do not include text outside the JSON."""

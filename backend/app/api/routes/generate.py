@@ -1,6 +1,6 @@
 """API routes for generating news from analyzed articles."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
@@ -24,9 +24,12 @@ class GenerateResponse(BaseModel):
 @router.post("/", response_model=GenerateResponse)
 async def generate_news(
     request: GenerateRequest,
+    req: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Start a Celery task to synthethize neutral news from validated facts."""
+    
+    language = req.headers.get("Accept-Language", "es")
     
     # 1. Validate all articles exist and are ANALYZED
     stmt = select(Article).where(Article.id.in_(request.article_ids))
@@ -47,7 +50,8 @@ async def generate_news(
     task = generate_news_from_articles.delay(
         request.article_ids,
         provider_name=provider_name,
-        encrypted_api_key=encrypted_key
+        encrypted_api_key=encrypted_key,
+        language=language
     )
     
     return GenerateResponse(task_id=task.id)

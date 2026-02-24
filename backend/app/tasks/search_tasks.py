@@ -371,7 +371,7 @@ def _search_and_analyze_sync(
     urls_to_evaluate = [a.source_url for a in extracted]
     if urls_to_evaluate:
         from app.tasks.domain_tasks import discover_and_evaluate_domains
-        discover_and_evaluate_domains.delay(urls_to_evaluate, provider_name, encrypted_api_key)
+        discover_and_evaluate_domains.delay(urls_to_evaluate, provider_name, encrypted_api_key, language)
 
     # ── Step 4: AI Analysis ───────────────────────────────────
     # ── Step 4: AI Analysis ───────────────────────────────────

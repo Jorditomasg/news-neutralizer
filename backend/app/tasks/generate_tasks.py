@@ -12,7 +12,7 @@ logger = structlog.get_logger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=1)
-def generate_news_from_articles(self, articles_ids: list[int], provider_name: str = "openai", encrypted_api_key: str | None = None):
+def generate_news_from_articles(self, articles_ids: list[int], provider_name: str = "openai", encrypted_api_key: str | None = None, language: str = "es"):
     """
     Generate neutral news from a list of successfully analyzed article IDs.
     """
@@ -73,22 +73,24 @@ def generate_news_from_articles(self, articles_ids: list[int], provider_name: st
         list_idx += 1
         
     # 5. Build prompt
+    lang_instruction = "Respond ONLY IN SPANISH." if language == "es" else "Respond ONLY IN ENGLISH."
     prompt = (
-        "Basado estrictamente en los siguientes hechos consolidados, genera una noticia neutral y objetiva.\n"
-        "REGLAS ESTRÍCTAS:\n"
-        "1. No asumas ni inventes nada que no esté en la lista.\n"
-        "2. Usa corchetes para referenciar las citas bibliograficas de los hechos usados, ejemplo: 'Ocurrió el evento [1] y [2].'\n"
-        "3. Estructura el JSON con las claves exactas de abajo.\n\n"
-        f"HECHOS:\n" + "\n".join(grouped_fact_texts) + "\n\n"
-        "Estructura JSON (Solo devuelve el JSON válido):\n"
+        "Based strictly on the following consolidated facts, generate a neutral and objective news article.\n"
+        "STRICT RULES:\n"
+        "1. Do not assume or invent anything that is not in the list.\n"
+        "2. Use brackets to reference the bibliographic citations of the facts used, example: 'The event occurred [1] and [2].'\n"
+        "3. Structure the JSON with the exact keys below.\n"
+        f"⚠️ LANGUAGE INSTRUCTION: {lang_instruction}\n\n"
+        f"FACTS:\n" + "\n".join(grouped_fact_texts) + "\n\n"
+        "JSON Structure (Only return the valid JSON):\n"
         "{\n"
-        '  "title": "Un titular objetivo y neutro",\n'
-        '  "lead": "El primer párrafo resumiendo los hechos core (responde qué, quién, cuándo, dónde).",\n'
-        '  "body": "El cuerpo central detallando los hechos, siempre citando entre corchetes [X] los hechos usados."\n'
+        '  "title": "An objective and neutral headline",\n'
+        '  "lead": "The first paragraph summarizing the core facts (answer what, who, when, where).",\n'
+        '  "body": "The main body detailing the facts, always citing in brackets [X] the facts used."\n'
         "}"
     )
     
-    provider = get_ai_provider(provider_name, encrypted_api_key)
+    provider = get_ai_provider(provider_name, encrypted_api_key, language=language)
     response = run_async(provider.analyze(prompt, max_tokens=2000))
     
     # Parse JSON
