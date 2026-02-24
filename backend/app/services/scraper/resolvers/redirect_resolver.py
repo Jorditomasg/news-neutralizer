@@ -63,7 +63,19 @@ class RedirectResolver:
         async with httpx.AsyncClient(
             timeout=15.0,
             follow_redirects=True, # Handles basic HTTP 3xx redirects automatically
-            headers={"User-Agent": self.USER_AGENT},
+            headers={
+                "User-Agent": self.USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                "Sec-Ch-Ua": '"Not A(Brand";v="8", "Chromium";v="132", "Brave";v="132"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            },
             cookies={"CONSENT": "YES+cb.20230101-14-p0.en+FX+430"}, # Generic Google/Tracking consent bypass
         ) as client:
             while redirect_count < self.MAX_REDIRECTS:

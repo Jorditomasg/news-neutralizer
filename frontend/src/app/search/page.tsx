@@ -313,20 +313,7 @@ function SearchContent() {
     }
   };
 
-  const parseNeutralizedArticle = (text: string) => {
-    if (!text) return { headline: "", lead: "", body: "" };
-    const lines = text.split("\n").filter(l => l.trim());
-    if (lines.length === 0) return { headline: "", lead: "", body: text };
 
-    const headline = lines[0].replace(/^\[?TITULAR[:\s]*/i, "").replace(/\]$/, "").trim();
-    const rest = lines.slice(1).join("\n\n");
-
-    const paragraphs = rest.split("\n\n").filter(p => p.trim());
-    const lead = paragraphs[0] || "";
-    const body = paragraphs.slice(1).join("\n\n");
-
-    return { headline, lead, body };
-  };
 
   const getBiasColor = (score: number) => {
     if (score < 0.3) return { bg: "bg-emerald-500/10", text: "text-emerald-400", bar: "bg-emerald-500" };
@@ -431,19 +418,6 @@ function SearchContent() {
           </div>
         </div>
       )}
-      {(status === "idle" || status === "error") && (
-        <div className="flex flex-col items-center text-center py-12 mb-8">
-          <h1 className="text-4xl font-display font-bold tracking-tight sm:text-6xl mb-6 bg-clip-text text-transparent bg-gradient-to-r from-gray-900 via-gray-700 to-gray-500 dark:from-white dark:via-gray-200 dark:to-gray-400">
-            Descubre la verdad <br />
-            <span className="text-teal-600 dark:text-teal-400">detrás de las noticias</span>
-          </h1>
-          <p className="mt-4 text-lg leading-8 text-gray-600 dark:text-gray-400 max-w-2xl mx-auto mb-10 transition-colors">
-            Analiza noticias con IA para detectar sesgos, comparar fuentes y obtener
-            resúmenes neutrales en segundos.
-          </p>
-          <SearchForm onSearch={handleSearch} isLoading={false} />
-        </div>
-      )}
 
       {/* Header - Show during Progress, Results, and Preview */}
       {(status !== "idle" && status !== "error" && status !== "headlines_selection" && status !== "headlines_loading") && (
@@ -464,7 +438,7 @@ function SearchContent() {
               <div className="flex items-center gap-2">
                 <span className="text-teal-700 dark:text-teal-400 font-medium">{task.source_article.source_name}</span>
                 {task.source_article.source_url && (
-                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 hover:text-gray-900 dark:hover:text-white transition-opacity">
+                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
                     🔗 {new URL(task.source_article.source_url).hostname}
                   </a>
                 )}
@@ -677,7 +651,7 @@ function SearchContent() {
         <div className="space-y-6">
           <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-white/[0.03] border border-gray-200 dark:border-white/10 transition-colors">
             {([
-              { key: "article" as const, label: "📝 Artículo neutral", icon: "" },
+              { key: "article" as const, label: "📝 Artículo neutralizado", icon: "" },
               { key: "bias" as const, label: "🎯 Sesgo detectado", icon: "" },
               { key: "sources" as const, label: "📊 Posibles Fuentes", icon: "" },
             ]).map(tab => (
@@ -685,7 +659,7 @@ function SearchContent() {
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
                 className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === tab.key
-                    ? "bg-teal-50 dark:bg-gradient-to-r dark:from-teal-500/20 dark:to-cyan-500/20 text-teal-800 dark:text-white shadow-sm dark:shadow-none border border-teal-200 dark:border-teal-500/30"
+                    ? "bg-teal-50 dark:bg-white/10 text-teal-800 dark:text-gray-100 shadow-sm dark:shadow-none border border-teal-200 dark:border-white/10"
                     : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.03]"
                   }`}
               >
@@ -713,7 +687,7 @@ function SearchContent() {
                   <div className="flex items-center gap-2">
                     <span className="text-lg">✍️</span>
                     <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">
-                      Artículo neutral
+                      Artículo neutralizado
                     </h2>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">
@@ -722,30 +696,23 @@ function SearchContent() {
                 </div>
                 <div className="p-6 md:p-8">
                   {(() => {
-                    const { headline, lead, body } = parseNeutralizedArticle(task.analysis.neutralized_summary);
+                    const articleObj = task.analysis.neutralized_article;
+                    if (!articleObj) return null;
+                    const { title, content } = articleObj;
+                    const paragraphs = content ? content.split("\n").filter(p => p.trim()) : [];
+                    
                     return (
                       <article className="prose-custom prose-gray dark:prose-invert">
-                        {headline && (
-                          <h2 className="font-display text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-4 leading-tight transition-colors">
-                            {headline}
+                        {title && (
+                          <h2 className="font-display text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-6 leading-tight transition-colors">
+                            {title.replace(/^\[?TITULAR[:\s]*/i, "").replace(/\]$/, "").trim()}
                           </h2>
                         )}
-                        {lead && (
-                          <p className="text-gray-800 dark:text-gray-300 text-lg leading-relaxed mb-6 font-medium border-l-2 border-teal-500/40 pl-4 transition-colors">
-                            {lead.replace(/^\[?ENTRADILLA[:\s]*/i, "").replace(/\]$/, "")}
+                        {paragraphs.map((paragraph, i) => (
+                          <p key={i} className={`text-gray-700 dark:text-gray-300 leading-relaxed transition-colors ${i === 0 ? 'text-lg font-medium border-l-2 border-teal-500/40 pl-4 mb-6' : 'mb-4'}`}>
+                            {paragraph.replace(/^\[?CUERPO[:\s]*/i, "").replace(/^\[?ENTRADILLA[:\s]*/i, "").replace(/^\[?CONCLUSI[ÓO]N[:\s]*/i, "").replace(/\]$/, "")}
                           </p>
-                        )}
-                        {body ? (
-                          body.split("\n\n").map((paragraph, i) => (
-                            <p key={i} className="text-gray-700 dark:text-gray-300 leading-relaxed mb-4 transition-colors">
-                              {paragraph.replace(/^\[?CUERPO[:\s]*/i, "").replace(/^\[?CONCLUSI[ÓO]N[:\s]*/i, "").replace(/\]$/, "")}
-                            </p>
-                          ))
-                        ) : (
-                          <p className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap transition-colors">
-                            {task.analysis.neutralized_summary}
-                          </p>
-                        )}
+                        ))}
                       </article>
                     );
                   })()}

@@ -74,7 +74,7 @@ def _save_analysis(task_id: str, analysis, provider_name: str, extracted_article
             topic_summary=analysis.topic_summary,
             objective_facts=analysis.objective_facts,
             bias_elements=analysis.bias_elements,
-            neutralized_summary=analysis.neutralized_summary,
+            neutralized_article=analysis.neutralized_article,
             source_bias_scores=analysis.source_bias_scores,
             provider_used=provider_name,
             tokens_used=analysis.tokens_used,
@@ -133,7 +133,7 @@ def _copy_cached_result_to_task(session: Session, new_task_id: str, cached_resul
         topic_summary=cached_result.topic_summary,
         objective_facts=cached_result.objective_facts,
         bias_elements=cached_result.bias_elements,
-        neutralized_summary=cached_result.neutralized_summary,
+        neutralized_article=cached_result.neutralized_article,
         source_bias_scores=cached_result.source_bias_scores,
         provider_used=cached_result.provider_used,
         model_used=cached_result.model_used,
@@ -514,12 +514,7 @@ def _search_and_analyze_url_sync(
         if normalize_url(hit.url) != normalize_url(source_article.source_url):
             related_articles_data.append(hit)
 
-    # ── Step 2: Chunking ──────────────────────────────────────
-    _update_task_progress(task_id, "analyzing", 10, progress_message="Segmentando artículo en bloques semánticos...")
-    chunks = segment_text_into_chunks(source_article.body, max_tokens=1500)
-    total_chunks = len(chunks)
-
-    # ── Step 3: Save initial Article to database ─────────────
+    # ── Step 1.8: Save initial Article to database ─────────────
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
         search_task = session.execute(stmt).scalar_one()
@@ -560,82 +555,32 @@ def _search_and_analyze_url_sync(
             
         session.commit()
 
-    # ── Step 4: Process Chunks (parallel for external APIs) ─────
-    import asyncio
+    # ── Step 2: AI Analysis (Mega-Prompt) ───────────────────────
     
-    # Ollama is single-GPU sequential; external APIs can handle concurrency
-    is_local_model = provider.name == "ollama"
-    max_concurrency = 1 if is_local_model else 3
+    _update_task_progress(task_id, "analyzing", 10, progress_message="Analizando el artículo con IA...")
     
-    async def _process_chunks_parallel(chunks_list, ai_provider, concurrency):
-        """Process chunks with controlled concurrency."""
-        semaphore = asyncio.Semaphore(concurrency)
-        
-        async def process_one(chunk_text, chunk_idx):
-            async with semaphore:
-                result = await ai_provider.extract_facts_from_chunk(chunk_text)
-                return chunk_idx, result
-        
-        tasks = [process_one(c, i) for i, c in enumerate(chunks_list, 1)]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+    articles_for_ai = [
+        {
+            "role": "MAIN_SOURCE_TO_ANALYZE",
+            "source_name": source_article.source_name,
+            "title": source_article.title,
+            "body": source_article.body[:4000], # Pass the first 4000 chars to avoid massive context
+        }
+    ]
     
-    _update_task_progress(task_id, "analyzing", 15, progress_message=f"Extrayendo hechos de {total_chunks} bloques...")
-    
-    chunk_results = run_async(_process_chunks_parallel(chunks, provider, max_concurrency))
-    
-    extracted_facts_all = []
-    pending_facts = []  # Accumulate StructuredFacts for batch insert
-    
-    for result in chunk_results:
-        if isinstance(result, Exception):
-            logger.error("Error extracting chunk", task_id=task_id, error=str(result))
-            continue
-        
-        chunk_idx, chunk_result = result
-        
-        # Accumulate facts for batch insert
-        for fact in chunk_result.facts:
-            pending_facts.append(StructuredFact(article_id=article_id, content=fact, type="FACT", chunk_index=chunk_idx))
-        for claim in chunk_result.unverified_claims:
-            pending_facts.append(StructuredFact(article_id=article_id, content=claim, type="UNVERIFIED_CLAIM", chunk_index=chunk_idx))
-        for bias in chunk_result.biases:
-            pending_facts.append(StructuredFact(article_id=article_id, content=f"{bias.get('type')}: {bias.get('quote')} - {bias.get('explanation')}", type="BIAS", chunk_index=chunk_idx))
-        for frame in chunk_result.framing:
-            pending_facts.append(StructuredFact(article_id=article_id, content=frame, type="FRAMING", chunk_index=chunk_idx))
-        
-        if chunk_result.entities:
-            pending_facts.append(StructuredFact(article_id=article_id, content="Entidades detectadas", type="ENTITIES", entities=chunk_result.entities, chunk_index=chunk_idx))
-        if chunk_result.tone:
-            pending_facts.append(StructuredFact(article_id=article_id, content=chunk_result.tone, type="TONE", chunk_index=chunk_idx))
-            
-        extracted_facts_all.extend(chunk_result.facts)
+    try:
+        analysis = run_async(provider.analyze_articles(articles_for_ai))
+    except Exception as e:
+        error_msg = f"Error en análisis AI ({provider_name}): {str(e)[:500]}"
+        logger.error("AI analysis failed", task_id=task_id, error=str(e))
+        _update_task_progress(task_id, "failed", 60, error_msg)
+        return
 
-    # Batch insert all accumulated facts in a single session
-    if pending_facts:
-        with SyncSessionLocal() as session:
-            session.add_all(pending_facts)
-            session.commit()
-        logger.info("Batch inserted chunk facts", count=len(pending_facts), task_id=task_id)
+    _update_task_progress(task_id, "analyzing", 80, progress_message="Generando embeddings de los hechos encontrados...")
 
-    # ── Step 5: Consolidate & Embeddings ───────────────────────
-    _update_task_progress(task_id, "analyzing", 90, progress_message="Consolidando hechos atómicos extraídos...")
-    
-    # Skip LLM consolidation for short articles (single chunk or few facts)
-    if len(extracted_facts_all) > 5 and total_chunks > 1:
-        try:
-            consolidated_facts = run_async(provider.consolidate_intra_article_facts(extracted_facts_all))
-        except Exception as e:
-            logger.error("Error deduplicating facts", error=str(e))
-            consolidated_facts = extracted_facts_all
-    else:
-        logger.info("Skipping LLM consolidation (single chunk or few facts)", 
-                     facts_count=len(extracted_facts_all), chunks=total_chunks, task_id=task_id)
-        consolidated_facts = extracted_facts_all
-        
     from app.services.ai.clustering import generate_embeddings
-    embeddings = generate_embeddings(consolidated_facts)
+    embeddings = generate_embeddings(analysis.objective_facts)
 
-    # Build AnalysisResult using real extracted data (not hardcoded values)
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
         search_task = session.execute(stmt).scalar_one()
@@ -644,11 +589,8 @@ def _search_and_analyze_url_sync(
         article.status = ArticleStatus.ANALYZED
         article.analyzed_at = datetime.now(timezone.utc)
         
-        # Replace raw FACT entries with consolidated + embedded versions
-        from sqlalchemy import delete
-        session.execute(delete(StructuredFact).where(StructuredFact.article_id == article_id, StructuredFact.type == "FACT"))
-        
-        for fact, emb in zip(consolidated_facts, embeddings):
+        # Save StructuredFacts
+        for fact, emb in zip(analysis.objective_facts, embeddings):
             session.add(StructuredFact(
                 article_id=article_id,
                 content=fact,
@@ -657,70 +599,50 @@ def _search_and_analyze_url_sync(
                 embedding=emb if len(emb) > 0 else None
             ))
         
-        # Collect real bias elements from extracted chunks
-        bias_facts = session.execute(
-            select(StructuredFact).where(
-                StructuredFact.article_id == article_id,
-                StructuredFact.type.in_(["BIAS", "FRAMING"])
-            )
-        ).scalars().all()
-        
-        real_bias_elements = []
-        for bf in bias_facts:
-            # Parse back "type: quote - explanation" if possible
-            content = bf.content
-            b_type = bf.type.capitalize()
-            quote = ""
-            explanation = content
+        for bias in analysis.bias_elements:
+            b_type = bias.get("type", "bias")
+            quote = bias.get("original_text", "")
+            explanation = bias.get("explanation", "")
+            content = f"{b_type}: {quote} - {explanation}"
+            session.add(StructuredFact(
+                article_id=article_id,
+                content=content[:1000],
+                type="BIAS",
+                chunk_index=0
+            ))
             
-            if ": " in content and " - " in content:
-                parts = content.split(": ", 1)
-                b_type = parts[0]
-                remainder = parts[1]
-                if " - " in remainder:
-                    quote, explanation = remainder.split(" - ", 1)
-                else:
-                    explanation = remainder
-                    
-            real_bias_elements.append({
-                "source": source_article.source_name,
-                "type": b_type,
-                "original_text": quote or "Texto no extraído individualmente",
-                "explanation": explanation,
-                "severity": 3  # Default severity since it's not currently extracted
-            })
+        # Get score values from AI response
+        score_dict = analysis.source_bias_scores.get(source_article.source_name, {})
+        bias_score = score_dict.get("score")
         
-        # Build a real summary from consolidated facts
-        summary_text = ". ".join(consolidated_facts[:7]) + "." if consolidated_facts else "No se extrajeron hechos."
-        
+        # Update article bias
+        article.bias_score = bias_score if isinstance(bias_score, (float, int)) else None
+        article.bias_details = score_dict
+            
         # Clear any existing analysis result (in case of retry)
+        from sqlalchemy import delete
         session.execute(delete(AnalysisResult).where(AnalysisResult.search_task_id == search_task.id))
         
-        analysis = AnalysisResult(
+        db_analysis = AnalysisResult(
             search_task_id=search_task.id,
-            topic_summary=f"Análisis estructurado: {source_article.title[:100]}",
-            objective_facts=consolidated_facts,
-            bias_elements=real_bias_elements,
-            neutralized_summary=summary_text,
-            source_bias_scores={source_article.source_name: {
-                "score": round(len(real_bias_elements) / max(len(consolidated_facts), 1), 2),
-                "direction": "por determinar",
-                "confidence": round(min(len(consolidated_facts) / 10, 1.0), 2)
-            }},
+            topic_summary=analysis.topic_summary,
+            objective_facts=analysis.objective_facts,
+            bias_elements=analysis.bias_elements,
+            neutralized_article=analysis.neutralized_article,
+            source_bias_scores=analysis.source_bias_scores,
             provider_used=provider_name,
-            model_used=provider.name,
+            model_used=getattr(analysis, 'model_used', provider.name),
             processing_time_ms=0,
             filtered_articles_count=0,
             avg_similarity_score=1.0,
-            tokens_used=0
+            tokens_used=analysis.tokens_used or 0
         )
-        session.add(analysis)
+        session.add(db_analysis)
         search_task.completed_at = datetime.now(timezone.utc)
         search_task.status = "completed"
         search_task.progress = 100
         session.commit()
-        logger.info(f"Article analysis completed", task_id=task_id, article_id=article_id,
-                     facts=len(consolidated_facts), biases=len(real_bias_elements))
+        logger.info(f"Article analysis completed via Mega-Prompt", task_id=task_id, article_id=article_id)
         
     # Phase 6: Trigger check for new context availability on existing generated news
     from app.tasks.generate_tasks import check_new_context_availability

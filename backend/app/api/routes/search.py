@@ -281,7 +281,7 @@ async def get_search_results(
             "topic_summary": task.analysis.topic_summary,
             "objective_facts": task.analysis.objective_facts,
             "bias_elements": task.analysis.bias_elements,
-            "neutralized_summary": task.analysis.neutralized_summary,
+            "neutralized_article": task.analysis.neutralized_article,
             "source_bias_scores": task.analysis.source_bias_scores,
             "provider_used": task.analysis.provider_used,
             "tokens_used": task.analysis.tokens_used,

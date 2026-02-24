@@ -106,7 +106,7 @@ class AnalysisResult(Base):
     topic_summary: Mapped[str] = mapped_column(Text, nullable=False)
     objective_facts: Mapped[list] = mapped_column(JSONB, nullable=False)  # List of factual statements
     bias_elements: Mapped[list] = mapped_column(JSONB, nullable=False)  # List of bias detections
-    neutralized_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    neutralized_article: Mapped[dict] = mapped_column(JSONB, nullable=False)
     source_bias_scores: Mapped[dict] = mapped_column(JSONB, nullable=False)  # Per-source bias metrics
     provider_used: Mapped[str] = mapped_column(String(50), nullable=False)
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)

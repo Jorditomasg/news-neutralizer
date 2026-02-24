@@ -16,7 +16,7 @@ class AnalysisResult:
     topic_summary: str
     objective_facts: list[str]
     bias_elements: list[dict]
-    neutralized_summary: str
+    neutralized_article: dict
     source_bias_scores: dict[str, dict]
     tokens_used: int | None = None
 
@@ -315,7 +315,7 @@ class AIProvider(ABC):
                 topic_summary=data.get("topic_summary", ""),
                 objective_facts=data.get("objective_facts", []),
                 bias_elements=data.get("bias_elements", []),
-                neutralized_summary=data.get("neutralized_summary", ""),
+                neutralized_article=data.get("neutralized_article", {"title": "Error", "content": "N/A"}),
                 source_bias_scores=data.get("source_bias_scores", {}),
             )
         except json.JSONDecodeError:
@@ -325,25 +325,24 @@ class AIProvider(ABC):
         topic = self._extract_json_string_value(text, "topic_summary") or ""
         facts = self._extract_json_array(text, "objective_facts") or []
         bias = self._extract_json_array(text, "bias_elements") or []
-        summary = self._extract_json_string_value(text, "neutralized_summary") or ""
+        neutralized = self._extract_json_object(text, "neutralized_article") or {"title": "Recuperado", "content": ""}
         scores = self._extract_json_object(text, "source_bias_scores") or {}
 
         # Check if we got anything useful
-        has_content = bool(topic or facts or bias or summary)
+        has_content = bool(topic or facts or bias or neutralized.get("content"))
         if has_content:
             logger.info(
                 "Extracted partial AI response",
                 topic_len=len(topic),
                 facts_count=len(facts),
                 bias_count=len(bias),
-                summary_len=len(summary),
                 has_scores=bool(scores),
             )
             return AnalysisResult(
                 topic_summary=topic,
                 objective_facts=facts,
                 bias_elements=bias,
-                neutralized_summary=summary,
+                neutralized_article=neutralized,
                 source_bias_scores=scores,
             )
 
@@ -354,7 +353,7 @@ class AIProvider(ABC):
             topic_summary="No se pudo procesar la respuesta de la IA",
             objective_facts=[],
             bias_elements=[],
-            neutralized_summary=text[:2000],
+            neutralized_article={"title": "Error de Procesamiento", "content": text[:2000]},
             source_bias_scores={},
         )
 
@@ -460,16 +459,13 @@ class AIProvider(ABC):
         return query
 
     def _build_analysis_prompt(self, articles: list[dict]) -> str:
-        """Build the structured analysis prompt."""
-        # Limit to 5 articles max to keep context manageable
-        limited = articles[:5]
-        articles_text = ""
-        for i, article in enumerate(limited, 1):
-            role = article.get("role", "ARTICLE")
-            articles_text += f"\n--- ARTÍCULO {i} [{role}] ---\n"
-            articles_text += f"Fuente: {article.get('source_name', 'Desconocida')}\n"
-            articles_text += f"Título: {article.get('title', '')}\n"
-            articles_text += f"Texto: {article.get('body', '')[:1500]}\n"
+        """Build the structured analysis Mega-Prompt."""
+        # Only process the first main article to save tokens and avoid multi-article merging
+        article = articles[0]
+        for a in articles:
+            if a.get("role") == "MAIN_SOURCE_TO_ANALYZE":
+                article = a
+                break
 
         lang_instruction = "Respond strictly in SPANISH." if self.language == "es" else "Respond strictly in ENGLISH."
         
@@ -486,39 +482,44 @@ class AIProvider(ABC):
         }
         bias_instruction = bias_map.get(self.bias_strictness, bias_map["standard"])
 
-        return f"""Analyze these articles about the same topic. Detect biases and write a neutral summary.
-
-CRITICAL INSTRUCTION:
-If an article is marked as [MAIN_SOURCE_TO_ANALYZE], your 'topic_summary', 'objective_facts', and 'neutralized_summary' MUST focus EXCLUSIVELY on the news or event reported in that main article.
-Articles marked as [RELATED_CONTEXT] should only be used to compare, detect what information the main article omitted, contrast headlines, and calculate bias.
-Under NO circumstances should you summarize or include information from the [RELATED_CONTEXT] that is not directly and explicitly related to the event of the [MAIN_SOURCE_TO_ANALYZE]. If the related articles talk about a different topic (even if it's the global news of the day), completely IGNORE them and base your response only on the main one.
+        source_name = article.get('source_name', 'Desconocida')
+        
+        return f"""Analyze the provided news article meticulously. Extract facts, detect biases, and generate a neutralized version of the article.
 
 {lang_instruction}
 
 USER PREFERENCES:
-- Summary length: {len_instruction}
+- Length: {len_instruction}
 - Bias detection strictness: {bias_instruction}
 
-{articles_text}
+--- ARTICLE ---
+Source: {source_name}
+Title: {article.get('title', '')}
+Text: {article.get('body', '')[:4000]}
 
-Respond ONLY with valid JSON with this structure:
+Respond ONLY with valid JSON with this exact structure:
 
 {{
-  "topic_summary": "Description of the topic in 2-3 sentences focused on the main news",
-  "objective_facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"],
+  "topic_summary": "Brief description of the topic in 2-3 sentences",
+  "objective_facts": ["fact 1", "fact 2", "fact 3"],
+  "opinions_and_hypotheses": ["opinion 1", "speculation 2"],
+  "omissions": ["missing context 1"],
   "bias_elements": [
     {{
-      "source": "media name",
+      "source": "{source_name}",
       "type": "sensationalism|omission|framing|adjectivation",
-      "original_text": "brief exact quote",
-      "explanation": "why it is bias",
+      "original_text": "exact quote from text",
+      "explanation": "logical explanation of why it is a bias",
       "severity": 3
     }}
   ],
-  "neutralized_summary": "{len_instruction} focused on the main news. Only verified facts, without opinions or evaluative adjectives. Include data and exact quotes between quotation marks.",
+  "neutralized_article": {{
+    "title": "Concise, factual title without bias. Do not use loaded words.",
+    "content": "{len_instruction}. Developed description based EXCLUSIVELY on the objective_facts. Do not repeat the original framing."
+  }},
   "source_bias_scores": {{
-    "media name": {{"score": 0.5, "direction": "left|center|right", "confidence": 0.7}}
+    "{source_name}": {{"score": 0.5, "direction": "left|center|right", "confidence": 0.7}}
   }}
 }}
 
-IMPORTANT: The JSON must be valid. Use double quotes. Do not include text outside the JSON."""
+IMPORTANT: The JSON must be completely valid. Do not include any text outside the JSON."""

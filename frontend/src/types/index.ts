@@ -53,7 +53,10 @@ export interface AnalysisResult {
   topic_summary: string;
   objective_facts: string[];
   bias_elements: BiasElement[];
-  neutralized_summary: string;
+  neutralized_article: {
+    title: string;
+    content: string;
+  };
   source_bias_scores: Record<string, SourceBiasScore>;
   provider_used: string;
   tokens_used: number | null;

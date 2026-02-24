@@ -94,6 +94,11 @@ class SourceBiasScore(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class NeutralizedArticle(BaseModel):
+    """The generated neutralized article output."""
+    title: str
+    content: str
+
 class AnalysisResultOut(BaseModel):
     """Full analysis result."""
     model_config = ConfigDict(from_attributes=True)
@@ -101,7 +106,7 @@ class AnalysisResultOut(BaseModel):
     topic_summary: str
     objective_facts: list[str]
     bias_elements: list[BiasElement]
-    neutralized_summary: str
+    neutralized_article: NeutralizedArticle
     source_bias_scores: dict[str, SourceBiasScore]
     provider_used: str
     tokens_used: int | None
