@@ -23,6 +23,9 @@ function TaskConnection({ task }: { task: TaskItem }) {
       } else if (data.status === "failed") {
         failTask(task.id, data.error_message || "Ocurrió un error al procesar la noticia.");
         ws.close();
+      } else if (data.status === "not_found") {
+        failTask(task.id, data.message || "Tarea no encontrada en el servidor.");
+        ws.close();
       } else {
         const progress = data.progress || 0;
         const msg = data.progress_message || `Procesando... ${progress}%`;

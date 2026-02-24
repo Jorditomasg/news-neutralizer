@@ -110,13 +110,6 @@ export default function SettingsPage() {
         <p className="mt-2 text-gray-500 dark:text-gray-400">{t.settings.description}</p>
       </div>
 
-      {/* Security Notice */}
-      <div className="rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4">
-        <p className="text-sm text-teal-800 dark:text-teal-300">
-          {t.settings.securityNotice}
-        </p>
-      </div>
-
       {/* Preferences Section */}
       <section className="space-y-6">
         <div>
@@ -133,9 +126,16 @@ export default function SettingsPage() {
               onChange={(e) => setLanguage(e.target.value as "en" | "es")}
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
-              <option value="es">{t.prefs.language_es}</option>
-              <option value="en">{t.prefs.language_en}</option>
+              <option value="es" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.language_es}</option>
+              <option value="en" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.language_en}</option>
             </select>
+          </div>
+
+          {/* Security Notice */}
+          <div className="rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4">
+            <p className="text-sm text-teal-800 dark:text-teal-300">
+              {t.settings.securityNotice}
+            </p>
           </div>
 
           {/* AI Provider Selector */}
@@ -151,7 +151,7 @@ export default function SettingsPage() {
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
               {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>
+                <option key={p.id} value={p.id} className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">
                   {getProviderName(p.id)}
                 </option>
               ))}
@@ -169,9 +169,9 @@ export default function SettingsPage() {
               onChange={(e) => setSummaryLength(e.target.value)}
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
-              <option value="short">{t.prefs.summaryLength_short}</option>
-              <option value="medium">{t.prefs.summaryLength_medium}</option>
-              <option value="long">{t.prefs.summaryLength_long}</option>
+              <option value="short" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_short}</option>
+              <option value="medium" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_medium}</option>
+              <option value="long" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_long}</option>
             </select>
           </div>
 
@@ -183,8 +183,8 @@ export default function SettingsPage() {
               onChange={(e) => setBiasStrictness(e.target.value)}
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
-              <option value="standard">{t.prefs.biasStrictness_standard}</option>
-              <option value="strict">{t.prefs.biasStrictness_strict}</option>
+              <option value="standard" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.biasStrictness_standard}</option>
+              <option value="strict" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.biasStrictness_strict}</option>
             </select>
           </div>
         </div>

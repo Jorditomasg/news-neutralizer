@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export function NotificationCenter() {
-  const { tasks, clearCompletedTasks } = useTaskContext();
+  const { tasks, clearCompletedTasks, removeTask } = useTaskContext();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -95,9 +95,23 @@ export function NotificationCenter() {
                           <p className="text-sm font-medium text-gray-900 dark:text-white truncate pr-2 transition-colors" title={task.title}>
                             {task.title || "Procesando URL..."}
                           </p>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 font-mono shrink-0 transition-colors">
-                            {task.progress}%
-                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono transition-colors">
+                              {task.progress}%
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeTask(task.id);
+                              }}
+                              className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors p-0.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+                              title="Eliminar notificación"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                         
                         <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1 mb-2 transition-colors">
