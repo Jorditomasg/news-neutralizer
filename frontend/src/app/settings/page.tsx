@@ -131,13 +131,6 @@ export default function SettingsPage() {
             </select>
           </div>
 
-          {/* Security Notice */}
-          <div className="rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4">
-            <p className="text-sm text-teal-800 dark:text-teal-300">
-              {t.settings.securityNotice}
-            </p>
-          </div>
-
           {/* AI Provider Selector */}
           <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none">
             <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t.prefs.ai_model}</label>
@@ -189,6 +182,13 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+
+      {/* Security Notice */}
+      <div className="rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4">
+        <p className="text-sm text-teal-800 dark:text-teal-300">
+          {t.settings.securityNotice}
+        </p>
+      </div>
 
       {/* API Key Input Section (Conditional) */}
       <section className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-6 shadow-sm dark:shadow-none">
