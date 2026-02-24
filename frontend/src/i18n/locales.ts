@@ -4,6 +4,9 @@ export const es = {
     history: "Historial",
     settings: "Configuración",
     analyzed_news: "Noticias Analizadas",
+    generated_news: "Noticias Generadas",
+    dark_mode: "Modo Oscuro",
+    light_mode: "Modo Claro",
   },
   settings: {
     title: "Configuración",
@@ -52,6 +55,9 @@ export const en: typeof es = {
     history: "History",
     settings: "Settings",
     analyzed_news: "Analyzed News",
+    generated_news: "Generated News",
+    dark_mode: "Dark Mode",
+    light_mode: "Light Mode",
   },
   settings: {
     title: "Settings",
