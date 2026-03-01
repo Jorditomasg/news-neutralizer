@@ -6,12 +6,15 @@ import type { SearchTask, ArticlePreview } from "@/types";
 import { SearchProgress } from "@/components/search/SearchProgress";
 import { SearchForm } from "@/components/search/SearchForm";
 import { FeedbackButtons } from "@/components/feedback/FeedbackButtons";
+import { useSmoothProgress } from "@/hooks/useSmoothProgress";
 import { useTaskContext } from "@/context/TaskContext";
-import { sessionHeaders } from "@/lib/session";
+import { apiClient, ApiError } from "@/lib/api";
+import { useI18n } from "@/context/I18nContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 function SearchContent() {
+  const { t } = useI18n();
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
   const initialTaskId = searchParams.get("taskId");
@@ -20,7 +23,8 @@ function SearchContent() {
   const [taskId, setTaskId] = useState<string | null>(initialTaskId);
   const [status, setStatus] = useState<string>(initialTaskId ? "pending" : "idle");
   const [progress, setProgress] = useState(0);
-  const [displayProgress, setDisplayProgress] = useState(0);
+  const [expectedDurationMs, setExpectedDurationMs] = useState(0);
+  const { displayProgress } = useSmoothProgress(taskId, progress, status, expectedDurationMs);
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [task, setTask] = useState<SearchTask | null>(null);
@@ -54,51 +58,18 @@ function SearchContent() {
   useEffect(() => {
     if (task?.status === "completed" && status !== "completed") {
       setStatus("completed");
-      setDisplayProgress(100);
     }
   }, [task, status]);
-
-  useEffect(() => {
-    if (status === "completed" || status === "failed") {
-      setDisplayProgress(progress);
-      return;
-    }
-
-    const timer = setInterval(() => {
-      setDisplayProgress((prev) => {
-        if (prev >= progress) {
-          const cap = status === "analyzing" ? 95 : 90;
-          if (prev < cap && (status === "scraping" || status === "analyzing")) {
-            return prev + 0.05;
-          }
-          return prev;
-        }
-        const diff = progress - prev;
-        const step = Math.max(diff * 0.1, 0.5);
-        return Math.min(prev + step, progress);
-      });
-    }, 50);
-
-    return () => clearInterval(timer);
-  }, [progress, status]);
-
-  useEffect(() => {
-    if (status === "starting") setDisplayProgress(0);
-  }, [status]);
 
   const fetchHeadlines = async (searchQuery: string) => {
     try {
       setStatus("headlines_loading");
-      const res = await fetch(`${API_BASE}/api/v1/search/headlines`, {
+      const data = await apiClient("/api/v1/search/headlines", {
         method: "POST",
-        headers: sessionHeaders(),
         body: JSON.stringify({ query: searchQuery }),
       });
 
-      if (!res.ok) throw new Error("Failed to fetch headlines");
-
-      const data = await res.json();
-      setHeadlines(data || []);
+      setHeadlines((data as ArticlePreview[]) || []);
       setShowHeadlines(true);
       setStatus("headlines_selection");
     } catch (e) {
@@ -112,16 +83,12 @@ function SearchContent() {
   const fetchPreview = async (url: string) => {
     try {
       setStatus("preview");
-      const res = await fetch(`${API_BASE}/api/v1/search/preview`, {
+      const data = await apiClient("/api/v1/search/preview", {
         method: "POST",
-        headers: sessionHeaders(),
         body: JSON.stringify({ url }),
       });
 
-      if (!res.ok) throw new Error("Failed to fetch preview");
-
-      const data: ArticlePreview = await res.json();
-      setPreviewData(data);
+      setPreviewData(data as ArticlePreview);
     } catch (e) {
       console.error("Preview failed, falling back to direct search", e);
       startSearch(url);
@@ -140,7 +107,6 @@ function SearchContent() {
       setTaskId(null);
       setTask(null);
       setProgress(0);
-      setDisplayProgress(0);
       setMessage("");
       setWarnings([]);
       setSelectedHeadline(null);
@@ -169,37 +135,33 @@ function SearchContent() {
         payload.original_query = query;
       }
 
-      const res = await fetch(`${API_BASE}/api/v1/search/`, {
+      const data = await apiClient("/api/v1/search/", {
         method: "POST",
-        headers: sessionHeaders(),
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json();
-        // Check for ambiguous topic error
-        if (res.status === 400 && errorData.detail && typeof errorData.detail === 'string' && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
-          const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
-          setIsAmbiguous(true);
-          setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
-          setStatus("headlines_selection");
-          setShowHeadlines(true);
-          return;
-        }
-        // Stringify the error detail safely (fixes [Object Object])
-        const errorDetail = typeof errorData.detail === 'string' 
-          ? errorData.detail 
-          : JSON.stringify(errorData.detail) || "Error desconocido del servidor";
-        throw new Error(errorDetail);
-      }
-
-      const data = await res.json();
-      setTaskId(data.task_id);
-      addTask(data.task_id, headline ? headline.title : query || "Analizando noticia...");
+      const resData = data as any;
+      setTaskId(resData.task_id);
+      if (resData.expected_duration_ms) setExpectedDurationMs(resData.expected_duration_ms);
+      addTask(resData.task_id, headline ? headline.title : query || "Analizando noticia...");
       setStatus("pending");
     } catch (e: any) {
+      if (e instanceof ApiError && e.status === 400 && e.body.includes("AMBIGUOUS_TOPIC")) {
+        try {
+          const errorData = JSON.parse(e.body);
+          if (errorData.detail && typeof errorData.detail === 'string' && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
+            const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
+            setIsAmbiguous(true);
+            setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
+            setStatus("headlines_selection");
+            setShowHeadlines(true);
+            return;
+          }
+        } catch {}
+      }
+
       if (!isAmbiguous) {
-        const errorMsg = typeof e.message === 'string' ? e.message : "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?";
+        const errorMsg = e instanceof ApiError ? e.message : (typeof e.message === 'string' ? e.message : "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?");
         _recoverToHeadlines(headline?.source_url, errorMsg);
       }
       hasStarted.current = false;
@@ -218,6 +180,7 @@ function SearchContent() {
       setStatus(data.status);
       setProgress(data.progress);
       setMessage(typeof data.message === 'string' ? data.message : '');
+      if (data.expected_duration_ms) setExpectedDurationMs(data.expected_duration_ms);
 
       if (data.warnings && Array.isArray(data.warnings) && data.warnings.length > 0) {
         setWarnings(data.warnings);
@@ -225,15 +188,16 @@ function SearchContent() {
 
       if (data.status === "completed") {
         fetchResults(taskId);
+      } else if (data.status === "redirected") {
+        const existingTaskId = data.progress_message || data.message;
+        if (existingTaskId) {
+            router.replace(`/search?taskId=${existingTaskId}`);
+        }
       } else if (data.status === "failed") {
         const errMsg = typeof data.error_message === 'string' ? data.error_message 
           : typeof data.message === 'string' ? data.message : "Error durante el análisis";
         _recoverToHeadlines(selectedHeadline?.source_url, errMsg);
       }
-    };
-
-    ws.onerror = () => {
-      pollResults(taskId);
     };
 
     return () => {
@@ -243,18 +207,15 @@ function SearchContent() {
 
   const fetchResults = async (id: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/search/${id}`, { headers: sessionHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setTask(data);
-        setStatus(data.status);
-        if (data.warnings && Array.isArray(data.warnings) && data.warnings.length > 0) {
-            setWarnings(data.warnings);
-        }
-        if (data.status === "completed") {
-            setProgress(100);
-            setDisplayProgress(100);
-        }
+      const data = await apiClient(`/api/v1/search/${id}`);
+      const resData = data as any;
+      setTask(resData);
+      setStatus(resData.status);
+      if (resData.warnings && Array.isArray(resData.warnings) && resData.warnings.length > 0) {
+          setWarnings(resData.warnings);
+      }
+      if (resData.status === "completed") {
+          setProgress(100);
       }
     } catch (e) {
       console.error("Failed to fetch results", e);
@@ -272,46 +233,7 @@ function SearchContent() {
       }
   }, [initialTaskId]);
 
-  const pollResults = async (id: string) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/search/${id}`, { headers: sessionHeaders() });
-        if (res.ok) {
-          const data = await res.json();
-          setStatus(data.status);
-          setProgress(data.progress);
-          if (data.progress_message || data.error_message) {
-              setMessage(data.progress_message || data.error_message);
-          }
-          if (data.warnings && Array.isArray(data.warnings) && data.warnings.length > 0) {
-              setWarnings(data.warnings);
-          }
-          if (data.status === "completed") {
-            setTask(data);
-            clearInterval(interval);
-          } else if (data.status === "failed") {
-            clearInterval(interval);
-            const errMsg = typeof data.error_message === 'string' ? data.error_message : "Error durante el análisis";
-            _recoverToHeadlines(selectedHeadline?.source_url, errMsg);
-          }
-        }
-      } catch (e) {
-        clearInterval(interval);
-      }
-    }, 3000);
-  };
 
-  const getProgressLabel = () => {
-    if (message) return message;
-
-    switch (status) {
-      case "starting": return "Iniciando búsqueda...";
-      case "pending": return "En cola de procesamiento...";
-      case "scraping": return progress < 30 ? "Buscando artículos..." : "Procesando contenido...";
-      case "analyzing": return "Analizando con IA...";
-      default: return "Procesando...";
-    }
-  };
 
 
 
@@ -362,7 +284,7 @@ function SearchContent() {
                 </svg>
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-400 transition-colors mb-1">Noticia seleccionada</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-400 transition-colors mb-1">{t?.search.selected_news_title}</p>
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white transition-colors leading-snug">{pendingHeadline.title}</h2>
               </div>
             </div>
@@ -370,20 +292,20 @@ function SearchContent() {
             {/* Meta */}
             <div className="flex flex-wrap gap-3 mb-6 text-sm text-gray-400">
               <div className="flex items-center gap-2 rounded-lg bg-white/5 dark:bg-white/5 border border-gray-200 dark:border-white/5 px-3 py-2">
-                <span className="text-xs font-bold uppercase tracking-wide text-gray-500">Fuente</span>
+                <span className="text-xs font-bold uppercase tracking-wide text-gray-500">{t?.search.source}</span>
                 <span className="font-semibold text-gray-900 dark:text-white">{pendingHeadline.source_name}</span>
               </div>
               {pendingHeadline.published_at && (
                 <div className="flex items-center gap-2 rounded-lg bg-white/5 dark:bg-white/5 border border-gray-200 dark:border-white/5 px-3 py-2">
-                  <span className="text-xs font-bold uppercase tracking-wide text-gray-500">Fecha</span>
-                  <span>{new Date(pendingHeadline.published_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                  <span className="text-xs font-bold uppercase tracking-wide text-gray-500">{t?.search.date}</span>
+                  <span>{new Date(pendingHeadline.published_at).toLocaleDateString()}</span>
                 </div>
               )}
             </div>
 
             {/* URL preview */}
             <div className="mb-7 rounded-lg bg-gray-50 dark:bg-white/[0.03] border border-gray-200 dark:border-white/5 transition-colors px-4 py-2.5">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-1">Enlace</p>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-1">{t?.search.link}</p>
               <a
                 href={pendingHeadline.source_url}
                 target="_blank"
@@ -406,13 +328,13 @@ function SearchContent() {
                 }}
                 className="flex-1 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 active:scale-95"
               >
-                🚀 Continuar análisis
+                {t?.search.continue_analysis}
               </button>
               <button
                 onClick={() => setPendingHeadline(null)}
                 className="flex-1 py-3 rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.03] hover:bg-gray-100 dark:hover:bg-white/[0.07] text-gray-700 dark:text-gray-300 font-semibold text-sm transition-all active:scale-95"
               >
-                Cancelar
+                {t?.search.cancel}
               </button>
             </div>
           </div>
@@ -420,50 +342,66 @@ function SearchContent() {
       )}
 
       {/* Header - Show during Progress, Results, and Preview */}
-      {(status !== "idle" && status !== "error" && status !== "headlines_selection" && status !== "headlines_loading") && (
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="h-8 w-1 rounded-full bg-gradient-to-b from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-500" />
-            {task?.status === "completed" && task.source_article ? (
-              <h1 className="font-display text-3xl font-bold leading-tight text-gray-900 dark:text-white/90 transition-colors">
-                {task.source_article.title}
-              </h1>
-            ) : (
-              <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">Análisis de noticias</h1>
-            )}
-          </div>
+      {(status !== "idle" && status !== "error" && status !== "headlines_selection" && status !== "headlines_loading") && (() => {
+        const displayArticle = task?.source_article 
+          ? { ...selectedHeadline, ...task.source_article } 
+          : selectedHeadline;
 
-          {task?.status === "completed" && task.source_article ? (
-            <div className="pl-[1.4rem] mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
-              <div className="flex items-center gap-2">
-                <span className="text-teal-700 dark:text-teal-400 font-medium">{task.source_article.source_name}</span>
-                {task.source_article.source_url && (
-                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
+        return (
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="h-8 w-1 rounded-full bg-gradient-to-b from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-500" />
+              {task?.status === "completed" && task.source_article ? (
+                <h1 className="font-display text-3xl font-bold leading-tight text-gray-900 dark:text-white/90 transition-colors">
+                  {task.source_article.title}
+                </h1>
+              ) : (
+                <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">{t?.search.title}</h1>
+              )}
+            </div>
+
+            {task?.status === "completed" && task.source_article ? (
+              <div className="pl-[1.4rem] mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
+                <div className="flex items-center gap-2">
+                  <span className="text-teal-700 dark:text-teal-400 font-medium">{task.source_article.source_name}</span>
+                  {task.source_article.source_url && (
+                    <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
+                      🔗 {new URL(task.source_article.source_url).hostname}
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full bg-gray-200 dark:bg-white/10 text-xs text-gray-700 dark:text-gray-300">{t?.search.completed}</span>
+                </div>
+              </div>
+            ) : displayArticle ? (
+              <div className="pl-[1.4rem] mt-2">
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1 leading-snug transition-colors">{displayArticle.title}</h2>
+                <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 transition-colors">
+                  <span className="text-teal-600 dark:text-teal-400 font-medium transition-colors">{displayArticle.source_name}</span>
+                  {displayArticle.source_url && (
+                    <a href={displayArticle.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
+                      🔗 {new URL(displayArticle.source_url).hostname}
+                    </a>
+                  )}
+                  {displayArticle.published_at && (
+                    <span>{new Date(displayArticle.published_at).toLocaleDateString()}</span>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-gray-500 dark:text-gray-400 pl-[1.4rem]">
+                Tema: <span className="text-teal-700 dark:text-teal-400 font-medium break-all">&quot;{task?.source_article?.title || task?.query || query}&quot;</span>
+                {task?.source_article?.source_url && (
+                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="ml-3 opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity break-all">
                     🔗 {new URL(task.source_article.source_url).hostname}
                   </a>
                 )}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded-full bg-gray-200 dark:bg-white/10 text-xs text-gray-700 dark:text-gray-300">Análisis completado</span>
-              </div>
-            </div>
-          ) : selectedHeadline ? (
-            <div className="pl-[1.4rem] mt-2">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1 leading-snug transition-colors">{selectedHeadline.title}</h2>
-              <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 transition-colors">
-                <span className="text-teal-600 dark:text-teal-400 font-medium transition-colors">{selectedHeadline.source_name}</span>
-                {selectedHeadline.published_at && (
-                  <span>{new Date(selectedHeadline.published_at).toLocaleDateString()}</span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-gray-500 dark:text-gray-400 pl-[1.4rem]">
-              Tema: <span className="text-teal-700 dark:text-teal-400 font-medium">&quot;{task?.source_article?.title || task?.query || query}&quot;</span>
-            </p>
-          )}
-        </div>
-      )}
+              </p>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Paywall / Truncation Warnings ────────────────────── */}
       {warnings.length > 0 && (
@@ -493,50 +431,97 @@ function SearchContent() {
       {(status === "starting" || status === "pending" || status === "scraping" || status === "analyzing") && (
         <SearchProgress
           status={status === "starting" ? "pending" : status}
-          progress={progress}
+          progress={displayProgress}
+          expectedDurationMs={expectedDurationMs}
           message={message}
         />
       )}
 
       {status === "preview" && previewData && (
-        <div className="mb-10 rounded-2xl border border-blue-200 dark:border-blue-500/20 bg-blue-50 dark:bg-blue-500/5 p-8 backdrop-blur-sm animate-fade-in relative overflow-hidden transition-colors">
-          <div className="absolute top-0 right-0 p-4 opacity-10">
-            <span className="text-9xl">📰</span>
-          </div>
-
-          <div className="relative z-10">
-            <h3 className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-3">Artículo Detectado</h3>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4 leading-tight max-w-3xl transition-colors">
-              {previewData.title}
-            </h2>
-
-            <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-300 mb-8 transition-colors">
-              <div className="flex items-center gap-2">
-                <span className="bg-white dark:bg-white/10 px-2 py-1 rounded text-xs text-gray-500 dark:text-gray-400 uppercase font-bold tracking-wider">Fuente</span>
-                <span className="font-medium text-gray-900 dark:text-white transition-colors">{previewData.source_name}</span>
-              </div>
-              {previewData.author && (
-                <div className="flex items-center gap-2">
-                  <span className="bg-white/10 px-2 py-1 rounded text-xs text-gray-400 uppercase font-bold tracking-wider">Autor</span>
-                  <span>{previewData.author}</span>
-                </div>
-              )}
-              {previewData.published_at && (
-                <div className="flex items-center gap-2">
-                  <span className="bg-white/10 px-2 py-1 rounded text-xs text-gray-400 uppercase font-bold tracking-wider">Fecha</span>
-                  <span>{new Date(previewData.published_at).toLocaleDateString()}</span>
+        <div className="mb-10 animate-fade-in relative z-10">
+          <div className="rounded-3xl border border-gray-200/50 dark:border-white/10 bg-white dark:bg-[#111] shadow-2xl shadow-teal-500/5 overflow-hidden transition-colors flex flex-col md:flex-row">
+            
+            {/* Left side: Image or Pattern */}
+            <div className="md:w-5/12 relative min-h-[250px] md:min-h-full bg-gray-100 dark:bg-zinc-900 overflow-hidden shrink-0">
+              {previewData.image_url ? (
+                <>
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent z-10" />
+                  <img 
+                    src={previewData.image_url} 
+                    alt={previewData.title}
+                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 hover:scale-105"
+                  />
+                  {/* Floating Action Button over image on desktop */}
+                  <div className="absolute bottom-6 left-6 right-6 z-20 hidden md:block">
+                    <button
+                      onClick={() => startSearch(query, previewData)}
+                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/25 hover:shadow-cyan-500/30 active:scale-95 flex justify-center items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                      <span>{t?.search.deep_analysis}</span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center opacity-10 scale-150">
+                   <span className="text-9xl">📰</span>
                 </div>
               )}
             </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => startSearch(query, previewData)}
-                className="px-6 py-3 rounded-xl bg-blue-500 hover:bg-blue-400 text-white font-bold shadow-lg shadow-blue-500/20 transition-all transform hover:scale-105 active:scale-95 flex items-center gap-2"
-              >
-                <span>🚀</span>
-                <span>Analizar este artículo</span>
-              </button>
+            {/* Right side: Content */}
+            <div className="p-8 md:p-10 flex flex-col flex-1 relative">
+              <div className="flex items-center gap-3 mb-4">
+                <span className="bg-teal-500/10 text-teal-600 dark:text-teal-400 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase">
+                  {previewData.source_name}
+                </span>
+                {previewData.published_at && (
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
+                    {new Date(previewData.published_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                )}
+                {previewData.has_paywall && (
+                   <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase ml-auto">
+                     {t?.search.possible_paywall}
+                   </span>
+                )}
+              </div>
+
+              <h2 className="text-2xl md:text-3xl font-display font-bold text-gray-900 dark:text-white mb-6 leading-tight transition-colors">
+                {previewData.title}
+              </h2>
+
+              <div className="prose-custom prose-gray dark:prose-invert max-w-none flex-1 mb-8">
+                {previewData.body ? (
+                  <>
+                    <p className="text-gray-700 dark:text-gray-300 text-lg font-medium leading-relaxed border-l-2 border-teal-500/40 pl-4 mb-5">
+                      {previewData.body.split('\n').find(p => p.trim() && p.trim().length > 20) || t?.search.no_summary}
+                    </p>
+                    <div className="space-y-4 text-gray-600 dark:text-gray-400 leading-relaxed text-[15px] relative">
+                      {/* Gradient fade to indicate more content */}
+                      <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-[#111] to-transparent z-10 pointer-events-none" />
+                      {previewData.body.split('\n')
+                        .filter(p => p.trim())
+                        .slice(1, 4) // Show up to 3 more paragraphs
+                        .map((p, i) => (
+                          <p key={i}>{p}</p>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-500 italic">No se pudo extraer el contenido del artículo. Procede al análisis para más detalles.</p>
+                )}
+              </div>
+
+              <div className="mt-auto block md:hidden">
+                <button
+                  onClick={() => startSearch(query, previewData)}
+                  className="w-full py-4 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 active:scale-95 flex justify-center items-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                  <span>{t?.search.send_to_ai}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -548,7 +533,7 @@ function SearchContent() {
             <div className="flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-gray-900 dark:text-white transition-colors mb-2">
-                  {headlines.length > 0 ? "¿Qué quieres analizar?" : "No encontramos titulares exactos"}
+                  {headlines.length > 0 ? t?.search.what_to_analyze : t?.search.no_headlines}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 transition-colors text-sm">
                   {headlines.length > 0 ? (
@@ -564,7 +549,7 @@ function SearchContent() {
                     onClick={() => startSearch(query)}
                     className="whitespace-nowrap px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-400 hover:to-cyan-500 text-white font-bold shadow-lg shadow-teal-500/20 transition-all transform hover:scale-105 active:scale-95 ring-1 ring-white/20"
                   >
-                    ⚡ Analizar Tema Global
+                    ⚡ {t?.search.analyze_global}
                   </button>
                 ) : (
                   <div className="text-right">
@@ -845,9 +830,9 @@ function SearchContent() {
                               />
                             </div>
                             <div className="flex justify-between mt-1.5 transition-colors">
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">Neutral</span>
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">Confianza: {((scores.confidence || 0) * 100).toFixed(0)}%</span>
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">Máx. sesgo</span>
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.neutral}</span>
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.confidence}{((scores.confidence || 0) * 100).toFixed(0)}%</span>
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.max_bias}</span>
                             </div>
                           </div>
                         );
@@ -860,7 +845,7 @@ function SearchContent() {
                 <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-lg">📰</span>
-                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">Artículos relacionados</h2>
+                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">{t?.search.related_articles}</h2>
                     <span className="ml-auto rounded-full bg-gray-100 dark:bg-white/5 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:text-gray-400">
                       {task.articles.length}
                     </span>
@@ -903,13 +888,13 @@ function SearchContent() {
 
                           {article.is_source && (
                             <span className="shrink-0 rounded-md bg-blue-100 dark:bg-blue-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/30">
-                              Base
+                              {t?.search.base_article}
                             </span>
                           )}
 
                           {isAnalyzed ? (
                             <span className="shrink-0 rounded-md bg-teal-100 dark:bg-teal-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300 ring-1 ring-inset ring-teal-500/30 flex items-center gap-1">
-                              ✅ Analizado
+                              ✅ {t?.search.analyzed}
                             </span>
                           ) : (
                             <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset ${
@@ -917,9 +902,9 @@ function SearchContent() {
                               article.status === 'ANALYZING' ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 ring-amber-400/50 dark:ring-amber-500/30' :
                               'bg-gray-200 dark:bg-gray-500/20 text-gray-700 dark:text-gray-300 ring-gray-400 dark:ring-gray-500/30'
                             }`}>
-                              {article.status === 'DETECTED' ? 'Detectado' :
-                               article.status === 'ANALYZING' ? 'Analizando...' :
-                               article.status || 'Detectado'}
+                              {article.status === 'DETECTED' ? t?.search.detected :
+                               article.status === 'ANALYZING' ? t?.search.analyzing :
+                               article.status || t?.search.detected}
                             </span>
                           )}
 
@@ -938,7 +923,7 @@ function SearchContent() {
                               }}
                               className="shrink-0 rounded-lg bg-gradient-to-r from-teal-500/80 to-cyan-500/80 px-3 py-1.5 text-[11px] font-bold text-gray-950 transition-all hover:from-teal-400 hover:to-cyan-400 hover:shadow-md hover:shadow-teal-500/20 active:scale-95"
                             >
-                              🔍 Analizar
+                              {t?.search.analyze_button}
                             </button>
                           )}
 
@@ -967,10 +952,11 @@ function SearchContent() {
               <div className="flex gap-3 items-start">
                 <span className="text-2xl">⏳</span>
                 <div>
-                  <h3 className="font-bold text-amber-800 dark:text-amber-400 mb-1">Artículos encontrados sin análisis</h3>
+                  <h3 className="font-bold text-amber-800 dark:text-amber-400 mb-1">{t?.search.articles_no_analysis}</h3>
                   <p className="text-amber-700/80 dark:text-amber-300/70 text-sm">
-                    Se encontraron {task.articles.length} artículos pero el análisis de IA no se completó.
-                    Verifica que Ollama esté corriendo y el modelo descargado.
+                    {t?.search.articles_no_analysis_desc.replace("{count}", task.articles.length.toString())}
+                    <br />
+                    {t?.search.verify_ollama}
                   </p>
                 </div>
               </div>

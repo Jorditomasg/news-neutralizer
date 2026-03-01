@@ -14,26 +14,13 @@ from app.models.domain import ArticleStatus
 from app.schemas import SearchRequest, TaskCreated, ExtractArticleRequest, ArticlePreviewResponse
 from app.tasks.search_tasks import search_and_analyze, search_and_analyze_url
 from app.services.scraper import ArticleExtractor
-
+import math
 
 router = APIRouter()
 
-
-async def _get_user_ai_config(db: AsyncSession, session_id: str = "default") -> tuple[str, str | None]:
-    """Get the user's preferred AI provider and encrypted key."""
-    stmt = select(UserAPIKey).where(UserAPIKey.session_id == session_id, UserAPIKey.is_valid == True)
-    result = await db.execute(stmt)
-    keys = result.scalars().all()
-
-    # Priority: openai > anthropic > google > ollama
-    for provider_name in ["openai", "anthropic", "google", "ollama"]:
-        for key in keys:
-            if key.provider == provider_name:
-                return provider_name, key.encrypted_key
-
-    # No keys configured — default to ollama (no key needed)
-    return "ollama", None
-
+from app.api.deps import _get_user_ai_config
+from app.core.rate_limit import limiter
+from app.config import settings
 
 def _is_url(text: str) -> bool:
     """Check if the input looks like a URL."""
@@ -59,7 +46,7 @@ async def _check_topic_specificity_fast(db: AsyncSession, topic: str) -> dict | 
     # 1. Fast Heuristic Filter (instant)
     words = topic.strip().split()
     if len(words) <= 2:
-        return {"is_specific": False, "reason": "Por favor, proporciona más contexto (usa al menos 3 palabras) o selecciona una noticia concreta."}
+        return {"is_specific": False, "reason": "Please provide more context (use at least 3 words) or select a specific news article."}
 
     # 2. Check DB Cache for previously evaluated topics (instant)
     normalized_topic = topic.strip().lower()
@@ -87,11 +74,13 @@ async def _check_topic_specificity_fast(db: AsyncSession, topic: str) -> dict | 
 
 
 from fastapi import Request
+from app.core.redis_utils import get_expected_duration
 
 @router.post("/", response_model=TaskCreated)
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def search_news(
-    request: SearchRequest,
-    req: Request,
+    body: SearchRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     session_id: str = Depends(get_session_id),
 ):
@@ -101,19 +90,19 @@ async def search_news(
     - Text input -> search RSS feeds by keywords
     """
     task_id = str(uuid.uuid4())
-    is_url_input = _is_url(request.query)
+    is_url_input = _is_url(body.query)
 
     # Extract user preferences from headers
-    language = req.headers.get("Accept-Language", "es")
-    summary_length = req.headers.get("X-Summary-Length", "medium")
-    bias_strictness = req.headers.get("X-Bias-Strictness", "standard")
+    language = request.headers.get("Accept-Language", "es")
+    summary_length = request.headers.get("X-Summary-Length", "medium")
+    bias_strictness = request.headers.get("X-Bias-Strictness", "standard")
 
     # Create search task record
     search_task = SearchTask(
         task_id=task_id,
         session_id=session_id,
-        query=request.query if not is_url_input else None,
-        source_url=request.query if is_url_input else None,
+        query=body.query if not is_url_input else None,
+        source_url=body.query if is_url_input else None,
         status="pending",
     )
     db.add(search_task)
@@ -123,7 +112,7 @@ async def search_news(
     provider_name, encrypted_key = await _get_user_ai_config(db)
 
     if is_url_input:
-        target_url = request.query.strip()
+        target_url = body.query.strip()
         
         # Fast-Track: Check if article is already ANALYZED
         stmt = select(Article).where(Article.source_url == target_url, Article.status == ArticleStatus.ANALYZED)
@@ -136,14 +125,15 @@ async def search_news(
             old_task_result = await db.execute(old_task_stmt)
             old_task = old_task_result.scalar_one_or_none()
             if old_task:
-                return TaskCreated(task_id=old_task.task_id)
+                ema_ms = get_expected_duration(provider_name)
+                return TaskCreated(task_id=old_task.task_id, expected_duration_ms=ema_ms)
 
         # URL mode: extract -> semantic query -> search -> analyze
         search_and_analyze_url.delay(
             task_id=task_id,
             url=target_url,
-            original_query=request.original_query,
-            source_slugs=request.sources,
+            original_query=body.original_query,
+            source_slugs=body.sources,
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
             language=language,
@@ -152,18 +142,18 @@ async def search_news(
         )
     else:
         # Topic mode: Fast heuristic + cache check (non-blocking)
-        rejection = await _check_topic_specificity_fast(db, request.query)
+        rejection = await _check_topic_specificity_fast(db, body.query)
         
         if rejection and not rejection.get("is_specific", True):
             from fastapi import HTTPException
-            reason = rejection.get("reason", "Tema demasiado genérico o ambiguo.")
+            reason = rejection.get("reason", "Topic is too generic or ambiguous.")
             raise HTTPException(status_code=400, detail=f"AMBIGUOUS_TOPIC: {reason}")
 
         # Specific enough (or needs LLM check in worker) -> search RSS -> analyze
         search_and_analyze.delay(
             task_id=task_id,
-            query=request.query,
-            source_slugs=request.sources,
+            query=body.query,
+            source_slugs=body.sources,
             provider_name=provider_name,
             encrypted_api_key=encrypted_key,
             language=language,
@@ -171,22 +161,25 @@ async def search_news(
             bias_strictness=bias_strictness,
         )
 
-    return TaskCreated(task_id=task_id)
+    ema_ms = get_expected_duration(provider_name)
+    return TaskCreated(task_id=task_id, expected_duration_ms=ema_ms)
 
 
 @router.post("/headlines", response_model=list[ArticlePreviewResponse])
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def search_headlines(
-    request: SearchRequest,
+    body: SearchRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Search for headlines (without starting full analysis).
     Used for the "Disambiguation" step in frontend.
     """
-    # Import here to avoid circular imports
     from app.services.scraper.google_news import search_google_news_rss
     
-    hits = await search_google_news_rss(request.query, max_results=10)
+    language = request.headers.get("Accept-Language", "es")
+    hits = await search_google_news_rss(body.query, max_results=10, language=language)
     
     responses = []
     for hit in hits:
@@ -204,13 +197,14 @@ async def search_headlines(
 
 
 @router.post("/preview", response_model=ArticlePreviewResponse)
-async def preview_article(request: ExtractArticleRequest):
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def preview_article(body: ExtractArticleRequest, request: Request):
     """
     Extract article metadata from a URL for preview.
     Does not save to DB or start analysis.
     """
     extractor = ArticleExtractor()
-    extracted = await extractor.extract(str(request.url))
+    extracted = await extractor.extract(str(body.url))
     
     return ArticlePreviewResponse(
         title=extracted.title,
@@ -219,13 +213,58 @@ async def preview_article(request: ExtractArticleRequest):
         author=extracted.author,
         published_at=extracted.published_at,
         topics=extracted.topics,
+        image_url=extracted.image_url,
+        body=extracted.body,
     )
 
 
+@router.get("/stats/average-time")
+async def get_average_analysis_time(db: AsyncSession = Depends(get_db)):
+    """Get the global average analysis time based on recent tasks, rounded up to nearest 15s."""
+    stmt = (
+        select(SearchTask.created_at, SearchTask.completed_at)
+        .where(
+            SearchTask.status == 'completed',
+            SearchTask.completed_at != None,
+            SearchTask.created_at != None
+        )
+        .order_by(SearchTask.completed_at.desc())
+        .limit(100)
+    )
+    
+    result = await db.execute(stmt)
+    rows = result.fetchall()
+    
+    if not rows:
+        return {"average_time_ms": 255000} # default 60s
+        
+    total_seconds = 0
+    count = 0
+    for created_at, completed_at in rows:
+        diff = (completed_at - created_at).total_seconds()
+        if diff > 0 and diff < 600: # sanity check: ignore negative or super long (>10m) tasks
+            total_seconds += diff
+            count += 1
+            
+    if count == 0:
+        return {"average_time_ms": 255000}
+        
+    avg_seconds = total_seconds / count
+    
+    # We want to round it up to the nearest 15 seconds. e.g. 62 -> 75
+    rounded_seconds = math.ceil(avg_seconds / 15.0) * 15
+    rounded_seconds = max(15, rounded_seconds)
+    
+    return {"average_time_ms": int(rounded_seconds * 1000)}
+
+
 @router.get("/{task_id}")
+@limiter.limit("60/minute") # allow faster polling for status checks
 async def get_search_results(
     task_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    session_id: str = Depends(get_session_id),
 ):
     """Get the status and results of a search task."""
     stmt = (
@@ -293,15 +332,19 @@ async def get_search_results(
     for a in task.articles:
         if a.is_truncated:
             warnings.append(
-                f"⚠️ El medio {a.source_name} parece tener contenido de pago. "
-                f"El artículo podría estar incompleto y el análisis podría no ser fiable."
+                f"⚠️ The source {a.source_name} appears to have a paywall. "
+                f"The article might be incomplete and the analysis may not be reliable."
             )
             break  # one warning per task is enough
+
+    provider_name, _ = await _get_user_ai_config(db, session_id)
+    ema_ms = get_expected_duration(provider_name)
 
     return {
         "task_id": task.task_id,
         "status": task.status,
         "progress": task.progress,
+        "progress_message": task.progress_message,
         "query": task.query,
         "source_url": task.source_url,
         "source_article": source_article,
@@ -311,4 +354,5 @@ async def get_search_results(
         "analysis": analysis_out,
         "error_message": task.error_message,
         "warnings": warnings,
+        "expected_duration_ms": ema_ms,
     }

@@ -45,6 +45,31 @@ class AIProvider(ABC):
         self.summary_length = summary_length
         self.bias_strictness = bias_strictness
 
+    # ── Language helpers ───────────────────────────────────────
+
+    #: Maps ISO 639-1 codes to English language names used in AI prompts.
+    #: Extend this dict when adding support for new locales.
+    LANGUAGE_NAMES: dict[str, str] = {
+        "es": "Spanish",
+        "en": "English",
+        "it": "Italian",
+        "fr": "French",
+        "de": "German",
+        "pt": "Portuguese",
+        "ca": "Catalan",
+        "nl": "Dutch",
+        "pl": "Polish",
+        "ru": "Russian",
+        "zh": "Chinese",
+        "ja": "Japanese",
+        "ar": "Arabic",
+    }
+
+    def _lang_instruction(self) -> str:
+        """Return a language instruction sentence for AI prompts based on `self.language`."""
+        name = self.LANGUAGE_NAMES.get(self.language, f"the language with ISO code '{self.language}'")
+        return f"Respond strictly in {name}."
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -73,8 +98,8 @@ class AIProvider(ABC):
 
     async def extract_facts_from_chunk(self, chunk: str) -> "ExtractedFactsResult":
         """Extract structured facts and bias info from a chunk of text."""
-        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
-        
+        lang_instruction = self._lang_instruction()
+
         bias_map = {
             "standard": "Filter it and only return extremely obvious and severe biases.",
             "strict": "Detect absolutely all manipulation tactics: framing, victimization, adjectivation, and mild partisan jargon.",
@@ -124,7 +149,7 @@ class AIProvider(ABC):
         if not facts:
             return []
             
-        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
+        lang_instruction = self._lang_instruction()
         facts_text = "\n".join([f"- {f}" for f in facts])
         prompt = (
             "Below is a list of facts extracted from different snippets "
@@ -400,7 +425,7 @@ class AIProvider(ABC):
         Evaluate if a topic is specific enough for a focused analysis.
         Returns: {"is_specific": bool, "reason": str}
         """
-        lang_instruction = "Respond ONLY IN SPANISH." if self.language == "es" else "Respond ONLY IN ENGLISH."
+        lang_instruction = self._lang_instruction()
         prompt = (
             f"Analyze if the following search topic is SPECIFIC enough to search for concrete news about a recent event, or if it is too generic/ambiguous/broad.\n\n"
             f"Topic: \"{topic}\"\n\n"
@@ -467,7 +492,7 @@ class AIProvider(ABC):
                 article = a
                 break
 
-        lang_instruction = "Respond strictly in SPANISH." if self.language == "es" else "Respond strictly in ENGLISH."
+        lang_instruction = self._lang_instruction()
         
         len_map = {
             "short": "Very brief and concise summary of 50-100 words",

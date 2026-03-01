@@ -1,4 +1,5 @@
 import { useState, KeyboardEvent } from "react";
+import { useI18n } from "@/context/I18nContext";
 
 interface SearchFormProps {
   onSearch: (query: string) => void;
@@ -6,6 +7,7 @@ interface SearchFormProps {
 }
 
 export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const isUrl = (text: string) => text.startsWith("http://") || text.startsWith("https://") || !!text.match(/^www\./);
   const isUrlDetected = isUrl(query);
@@ -38,7 +40,7 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Escribe un tema o pega un enlace..."
+            placeholder={t.search.input_placeholder}
             className="w-full bg-transparent border-none text-gray-900 dark:text-white text-lg placeholder-gray-400 dark:placeholder-gray-500 focus:ring-0 px-4 py-3"
             disabled={isLoading}
           />
@@ -59,12 +61,12 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
           {isLoading ? (
             <>
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              <span>Analizando...</span>
+              <span>{t.search.analyzing}</span>
             </>
           ) : (
             <>
               <span>{isUrlDetected ? "🔗" : "🔍"}</span>
-              <span>{isUrlDetected ? "Analizar Enlace" : "Analizar Tema"}</span>
+              <span>{isUrlDetected ? t.search.analyze_link : t.search.analyze_topic}</span>
             </>
           )}
         </button>

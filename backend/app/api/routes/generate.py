@@ -7,10 +7,13 @@ from typing import List
 
 from app.core.database import get_db
 from app.models.domain import Article, ArticleStatus, GeneratedNews, FactTraceability
-from app.api.routes.search import _get_user_ai_config
+from app.api.deps import _get_user_ai_config
 from app.tasks.generate_tasks import generate_news_from_articles
 from app.schemas.schemas import PaginatedGeneratedNewsOut, GeneratedNewsDetailOut
 from pydantic import BaseModel, Field
+
+from app.core.rate_limit import limiter
+from app.config import settings
 
 router = APIRouter()
 
@@ -22,21 +25,22 @@ class GenerateResponse(BaseModel):
     message: str = "Generation task started"
 
 @router.post("/", response_model=GenerateResponse)
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
 async def generate_news(
-    request: GenerateRequest,
-    req: Request,
+    body: GenerateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Start a Celery task to synthethize neutral news from validated facts."""
     
-    language = req.headers.get("Accept-Language", "es")
+    language = request.headers.get("Accept-Language", "es")
     
     # 1. Validate all articles exist and are ANALYZED
-    stmt = select(Article).where(Article.id.in_(request.article_ids))
+    stmt = select(Article).where(Article.id.in_(body.article_ids))
     result = await db.execute(stmt)
     articles = result.scalars().all()
     
-    if len(articles) != len(request.article_ids):
+    if len(articles) != len(body.article_ids):
         raise HTTPException(status_code=404, detail="One or more articles not found")
         
     for auth in articles:
@@ -48,7 +52,7 @@ async def generate_news(
     
     # 3. Dispatch Celery task
     task = generate_news_from_articles.delay(
-        request.article_ids,
+        body.article_ids,
         provider_name=provider_name,
         encrypted_api_key=encrypted_key,
         language=language
@@ -57,8 +61,10 @@ async def generate_news(
     return GenerateResponse(task_id=task.id)
 
 @router.get("/{news_id}", response_model=GeneratedNewsDetailOut)
+@limiter.limit("60/minute")
 async def get_generated_news(
     news_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieve a generated news article and its traceability links."""
@@ -84,7 +90,9 @@ async def get_generated_news(
     return news
 
 @router.get("/", response_model=PaginatedGeneratedNewsOut)
+@limiter.limit("60/minute")
 async def list_generated_news(
+    request: Request,
     page: int = 1,
     page_size: int = 15,
     db: AsyncSession = Depends(get_db),

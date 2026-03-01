@@ -13,13 +13,29 @@ from app.services.scraper.search import SearchHit
 logger = structlog.get_logger()
 
 
-async def search_google_news_rss(query: str, max_results: int = 15) -> list[SearchHit]:
+def _get_gnews_params(language: str) -> str:
+    lang = language.lower()[:2]
+    if lang == "en":
+        return "hl=en-US&gl=US&ceid=US:en"
+    elif lang == "fr":
+        return "hl=fr&gl=FR&ceid=FR:fr"
+    elif lang == "de":
+        return "hl=de&gl=DE&ceid=DE:de"
+    elif lang == "it":
+        return "hl=it&gl=IT&ceid=IT:it"
+    elif lang == "pt":
+        return "hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    # Default to Spanish
+    return "hl=es-ES&gl=ES&ceid=ES:es"
+
+async def search_google_news_rss(query: str, max_results: int = 15, language: str = "es") -> list[SearchHit]:
     """
     Search for articles using Google News RSS.
     
     Args:
         query: The search query.
         max_results: Maximum number of results to return.
+        language: ISO 639-1 language code (e.g. 'es', 'en').
         
     Returns:
         List of SearchHit objects.
@@ -27,8 +43,11 @@ async def search_google_news_rss(query: str, max_results: int = 15) -> list[Sear
     # Encode query
     encoded_query = urllib.parse.quote(query)
     
-    # Google News RSS URL for Spain (es-ES)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=es-ES&gl=ES&ceid=ES:es"
+    # Get locale params
+    loc_params = _get_gnews_params(language)
+    
+    # Google News RSS URL
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&{loc_params}"
     
     hits: list[SearchHit] = []
     
@@ -50,13 +69,7 @@ async def search_google_news_rss(query: str, max_results: int = 15) -> list[Sear
                     if parts[1] == source_title:
                         title = parts[0]
                 
-                # Parse date if available
-                published_at = None
-                if hasattr(entry, "published"):
-                    try:
-                        published_at = parsedate_to_datetime(entry.published)
-                    except Exception:
-                        pass
+                # Published date parsing was removed since SearchHit doesn't store it
                 
                 hits.append(SearchHit(
                     url=link,

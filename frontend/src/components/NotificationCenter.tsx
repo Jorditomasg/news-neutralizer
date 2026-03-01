@@ -4,12 +4,84 @@ import { useState, useRef, useEffect } from "react";
 import { useTaskContext } from "@/context/TaskContext";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSmoothProgress } from "@/hooks/useSmoothProgress";
+import { useI18n } from "@/context/I18nContext";
+
+function NotificationTaskItem({ task, removeTask, router, setIsOpen, getStatusColor, getStatusIcon }: any) {
+  const { displayProgress } = useSmoothProgress(task.id, task.progress, task.status);
+  const { t } = useI18n();
+  
+  return (
+    <li className="p-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors group">
+      <div className="flex gap-3">
+        <div className={`mt-0.5 shrink-0 flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${getStatusColor(task.status)} ${task.status === 'active' ? 'animate-pulse' : ''}`}>
+           {getStatusIcon(task.status)}
+        </div>
+        
+        <div className="flex-1 min-w-0">
+          <div className="flex justify-between items-start mb-1">
+            <p className="text-sm font-medium text-gray-900 dark:text-white truncate pr-2 transition-colors" title={task.title}>
+              {task.title || "Procesando URL..."}
+            </p>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-mono transition-colors">
+                {Math.round(displayProgress)}%
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeTask(task.id);
+                }}
+                className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors p-0.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
+                title="Eliminar notificación"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1 mb-2 transition-colors">
+            {task.message}
+          </p>
+          
+          {/* Miniature Progress Bar */}
+          <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden mb-2 transition-colors">
+            <div 
+              className={`h-full rounded-full transition-all duration-300 ease-out ${
+                task.status === "error" ? "bg-red-500" :
+                task.status === "completed" ? "bg-teal-500" :
+                "bg-gradient-to-r from-cyan-500 to-teal-400 dark:from-cyan-400 dark:to-teal-400"
+              }`}
+              style={{ width: `${Math.max(2, displayProgress)}%` }}
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                router.push(`/search?taskId=${task.id}`);
+              }}
+              className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:text-teal-500 dark:hover:text-teal-300 transition-colors"
+            >
+              Ver Detalles &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
 
 export function NotificationCenter() {
   const { tasks, clearCompletedTasks, removeTask } = useTaskContext();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const { t } = useI18n();
 
   const activeTasksCount = tasks.filter(t => t.status === "active" || t.status === "pending").length;
   const hasUnread = tasks.length > 0; // Simple unread logic for now
@@ -84,67 +156,15 @@ export function NotificationCenter() {
             ) : (
               <ul className="divide-y divide-gray-100 dark:divide-white/5">
                 {[...tasks].sort((a, b) => b.timestamp - a.timestamp).map((task) => (
-                  <li key={task.id} className="p-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors group">
-                    <div className="flex gap-3">
-                      <div className={`mt-0.5 shrink-0 flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${getStatusColor(task.status)} ${task.status === 'active' ? 'animate-pulse' : ''}`}>
-                         {getStatusIcon(task.status)}
-                      </div>
-                      
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-start mb-1">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate pr-2 transition-colors" title={task.title}>
-                            {task.title || "Procesando URL..."}
-                          </p>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono transition-colors">
-                              {task.progress}%
-                            </span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeTask(task.id);
-                              }}
-                              className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors p-0.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800"
-                              title="Eliminar notificación"
-                            >
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                        
-                        <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1 mb-2 transition-colors">
-                          {task.message}
-                        </p>
-                        
-                        {/* Miniature Progress Bar */}
-                        <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden mb-2 transition-colors">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              task.status === "error" ? "bg-red-500" :
-                              task.status === "completed" ? "bg-teal-500" :
-                              "bg-gradient-to-r from-cyan-500 to-teal-400 dark:from-cyan-400 dark:to-teal-400"
-                            }`}
-                            style={{ width: `${task.progress}%` }}
-                          />
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex justify-end mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => {
-                              setIsOpen(false);
-                              router.push(`/search?taskId=${task.id}`);
-                            }}
-                            className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:text-teal-500 dark:hover:text-teal-300 transition-colors"
-                          >
-                            Ver Detalles &rarr;
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </li>
+                  <NotificationTaskItem 
+                    key={task.id} 
+                    task={task} 
+                    removeTask={removeTask} 
+                    router={router} 
+                    setIsOpen={setIsOpen} 
+                    getStatusColor={getStatusColor} 
+                    getStatusIcon={getStatusIcon} 
+                  />
                 ))}
               </ul>
             )}

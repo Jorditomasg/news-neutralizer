@@ -1,9 +1,4 @@
-/**
- * Browser-side session management.
- * Generates a stable UUID per browser and stores it in localStorage.
- * This ID is sent as X-Session-ID on every API request to isolate
- * user data (API keys, history, feedback) without requiring auth.
- */
+import { locales } from "@/i18n/index";
 
 const SESSION_KEY = "news-neutralizer-session-id";
 
@@ -45,8 +40,15 @@ export function sessionHeaders(): Record<string, string> {
   };
 
   if (typeof window !== "undefined") {
-    const lang = localStorage.getItem("app_lang");
-    if (lang) headers["Accept-Language"] = lang;
+    // Resolve the ISO code from the locale registry (e.g. es_ES → "es", en_GB → "en")
+    const localeKey = localStorage.getItem("app_locale");
+    if (localeKey && localeKey in locales) {
+      headers["Accept-Language"] = locales[localeKey as keyof typeof locales].iso;
+    } else {
+      // Backwards-compat: old key stored just "es" or "en"
+      const oldLang = localStorage.getItem("app_lang");
+      if (oldLang) headers["Accept-Language"] = oldLang;
+    }
 
     const summaryLen = localStorage.getItem("app_summary_length");
     if (summaryLen) headers["X-Summary-Length"] = summaryLen;

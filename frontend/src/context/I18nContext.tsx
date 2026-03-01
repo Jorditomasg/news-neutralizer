@@ -1,14 +1,22 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { es, en, Translations } from "@/i18n/locales";
+import { locales, DEFAULT_LOCALE, type LocaleKey } from "@/i18n/index";
+import type { Translations } from "@/i18n/es_ES";
 
-type Language = "es" | "en";
+/** Shape of each entry in the available languages list. */
+export interface LanguageOption {
+  key: LocaleKey;
+  label: string;
+  flag: string;
+  iso: string;
+}
 
 interface I18nContextProps {
-  language: Language;
-  setLanguage: (lang: Language) => void;
+  locale: LocaleKey;
+  setLocale: (locale: LocaleKey) => void;
   t: Translations;
+  availableLanguages: LanguageOption[];
   // Extra user preferences that affect the backend prompts
   summaryLength: string;
   setSummaryLength: (val: string) => void;
@@ -18,50 +26,79 @@ interface I18nContextProps {
 
 const I18nContext = createContext<I18nContextProps | undefined>(undefined);
 
+/** Build the available languages list once from the registry. */
+const availableLanguages: LanguageOption[] = Object.entries(locales).map(
+  ([key, locale]) => ({
+    key: key as LocaleKey,
+    label: locale.label,
+    flag: locale.flag,
+    iso: locale.iso,
+  })
+);
+
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = useState<Language>("es");
+  const [locale, setLocaleState] = useState<LocaleKey>(DEFAULT_LOCALE);
   const [summaryLength, setSummaryLengthState] = useState("medium");
   const [biasStrictness, setBiasStrictnessState] = useState("standard");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const storedLang = localStorage.getItem("app_lang") as Language;
-    if (storedLang === "en" || storedLang === "es") {
-      setLanguageState(storedLang);
+    const storedLocale = localStorage.getItem("app_locale") as LocaleKey | null;
+    if (storedLocale && storedLocale in locales) {
+      setLocaleState(storedLocale);
+    } else {
+      // Backwards-compat: migrate old 'app_lang' values (es/en) to locale keys
+      const oldLang = localStorage.getItem("app_lang");
+      if (oldLang === "en") setLocaleState("en_GB");
+      else if (oldLang === "es") setLocaleState("es_ES");
     }
+
     const storedLen = localStorage.getItem("app_summary_length");
     if (storedLen) setSummaryLengthState(storedLen);
-    
+
     const storedBias = localStorage.getItem("app_bias_strictness");
     if (storedBias) setBiasStrictnessState(storedBias);
-    
+
     setMounted(true);
   }, []);
 
-  const setLanguage = (lang: Language) => {
-    setLanguageState(lang);
-    localStorage.setItem("app_lang", lang);
+  const setLocale = (key: LocaleKey) => {
+    setLocaleState(key);
+    localStorage.setItem("app_locale", key);
   };
-  
+
   const setSummaryLength = (val: string) => {
     setSummaryLengthState(val);
     localStorage.setItem("app_summary_length", val);
   };
-  
+
   const setBiasStrictness = (val: string) => {
     setBiasStrictnessState(val);
     localStorage.setItem("app_bias_strictness", val);
   };
 
-  const t = language === "en" ? en : es;
+  const t = locales[locale].translations as Translations;
 
   return (
-    <I18nContext.Provider value={{
-      language, setLanguage, t,
-      summaryLength, setSummaryLength,
-      biasStrictness, setBiasStrictness
-    }}>
-      <div className={!mounted ? "invisible flex-1 flex flex-col min-h-screen" : "flex-1 flex flex-col min-h-screen"}>
+    <I18nContext.Provider
+      value={{
+        locale,
+        setLocale,
+        t,
+        availableLanguages,
+        summaryLength,
+        setSummaryLength,
+        biasStrictness,
+        setBiasStrictness,
+      }}
+    >
+      <div
+        className={
+          !mounted
+            ? "invisible flex-1 flex flex-col min-h-screen"
+            : "flex-1 flex flex-col min-h-screen"
+        }
+      >
         {children}
       </div>
     </I18nContext.Provider>

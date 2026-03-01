@@ -2,6 +2,11 @@
 
 from cryptography.fernet import Fernet, InvalidToken
 import structlog
+import socket
+import ipaddress
+import jwt
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.config import settings
 
@@ -53,3 +58,67 @@ def decrypt_api_key(encrypted_key: str) -> str:
     except InvalidToken:
         logger.error("Failed to decrypt API key — possible key rotation issue")
         raise ValueError("Cannot decrypt API key — encryption key may have changed")
+
+# ── JWT Authentication ────────────────────────────────────────────────────────
+
+ALGORITHM = "HS256"
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    """Create a new JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """Decode and verify a JWT token. Raises jwt.PyJWTError on failure."""
+    return jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+
+# ── SSRF Prevention ──────────────────────────────────────────────────────────
+
+async def validate_url_for_ssrf(url: str) -> bool:
+    """
+    Validate that a URL does not resolve to a local/private IP address.
+    Raises ValueError if it's considered an SSRF risk.
+    """
+    from urllib.parse import urlparse
+    import asyncio
+    
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: Missing hostname")
+
+    # Fast-fail for obvious bad hostnames
+    if hostname in ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]:
+        raise ValueError(f"SSRF Risk: URL resolves to internal host {hostname}")
+
+    try:
+        loop = asyncio.get_running_loop()
+        # Resolve hostname to IPs using thread pool to avoid blocking async event loop
+        info = await loop.run_in_executor(None, socket.getaddrinfo, hostname, parsed.port or 80)
+        
+        for result in info:
+            ip_str = result[4][0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved:
+                raise ValueError(f"SSRF Risk: URL {url} resolves to private/internal IP {ip_str}")
+                
+        return True
+    except socket.gaierror:
+        # If it doesn't resolve here, it might fail later in httpx, which is fine.
+        # But if it's an obfuscated internal IP, it might bypass getaddrinfo? 
+        # ipaddress.ip_address() handles many integer/hex formats if passed directly.
+        try:
+            ip_obj = ipaddress.ip_address(hostname)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved:
+                raise ValueError(f"SSRF Risk: URL {url} resolves to private/internal IP {hostname}")
+        except ValueError:
+            pass # Not a direct IP string
+            
+        return True

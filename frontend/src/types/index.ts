@@ -12,6 +12,8 @@ export interface ArticlePreview {
   published_at: string | null;
   topics: string[];
   has_paywall?: boolean;
+  image_url?: string;
+  body?: string;
 }
 
 export interface Article {

@@ -53,6 +53,9 @@ class RedirectResolver:
         auto-redirects to find the final effective article URL.
         """
         # 1. Native fast-path check
+        from app.core.security import validate_url_for_ssrf
+        await validate_url_for_ssrf(url)
+
         fast_path_url = await self._resolve_fast_path(url)
         if fast_path_url:
             url = fast_path_url
@@ -78,9 +81,14 @@ class RedirectResolver:
             },
             cookies={"CONSENT": "YES+cb.20230101-14-p0.en+FX+430"}, # Generic Google/Tracking consent bypass
         ) as client:
+            from app.core.security import validate_url_for_ssrf
+
             while redirect_count < self.MAX_REDIRECTS:
                 logger.info("Resolving URL", url=current_url, redirect_count=redirect_count)
                 try:
+                    # Validate before fetching in case of open redirect to internal IP
+                    await validate_url_for_ssrf(current_url)
+
                     # We use GET to fetch content to analyze for consent walls
                     response = await client.get(current_url)
                     response.raise_for_status()

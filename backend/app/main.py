@@ -12,6 +12,11 @@ from app.api.routes import api_router
 from app.core.database import engine
 from app.models.base import Base
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.core.rate_limit import limiter
+
 logger = structlog.get_logger()
 
 
@@ -69,7 +74,27 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.app_debug else None,
     )
 
-    # CORS
+    # Rate Limiting Middleware
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
+    # Secure Headers Middleware
+    from fastapi import Request, Response
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response: Response = await call_next(request)
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["X-XSS-Protection"] = "1; mode=block"
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # CORS (Must be added last to evaluate first on request)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

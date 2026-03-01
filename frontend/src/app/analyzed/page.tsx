@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { SearchTaskSummary } from "@/types";
+import { apiClient } from "@/lib/api";
+import { useI18n } from "@/context/I18nContext";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -19,21 +21,19 @@ export default function AnalyzedPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const { t } = useI18n();
 
   const fetchHistory = async (p: number, q: string) => {
     try {
       setLoading(true);
       setError(null);
-      const url = new URL(`${API_BASE}/api/v1/history/`);
-      url.searchParams.append("page", p.toString());
-      url.searchParams.append("page_size", "15");
-      if (q) url.searchParams.append("query", q);
+      const searchParams = new URLSearchParams();
+      searchParams.append("page", p.toString());
+      searchParams.append("page_size", "15");
+      if (q) searchParams.append("query", q);
 
-      const res = await fetch(url.toString());
-      if (!res.ok) throw new Error("Error fetching history");
-      
-      const json = await res.json();
-      setData(json);
+      const data = await apiClient(`/api/v1/history/?${searchParams.toString()}`);
+      setData(data as PaginatedHistory);
     } catch (e: any) {
       setError(e.message || "Failed to load history");
     } finally {
@@ -58,14 +58,14 @@ export default function AnalyzedPage() {
       <div className="flex items-center gap-3 mb-8">
         <div className="h-8 w-1 rounded-full bg-gradient-to-b from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-500" />
         <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">
-          Noticias Analizadas
+          {t?.analyzed.title}
         </h1>
       </div>
 
       <div className="mb-6">
         <input
           type="text"
-          placeholder="Buscar temas, URLs..."
+          placeholder={t?.analyzed.search_placeholder}
           value={search}
           onChange={handleSearchChange}
           className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl px-4 py-3 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 shadow-sm dark:shadow-none focus:outline-none focus:ring-2 focus:ring-teal-500/50 dark:focus:ring-teal-400/50 focus:border-transparent transition-all"
@@ -94,10 +94,10 @@ export default function AnalyzedPage() {
                   </div>
                   <div className="min-w-0">
                     <h3 className="text-sm font-bold text-gray-900 dark:text-white transition-colors">
-                      Tienes {data.items.length} noticias analizadas
+                      {t?.analyzed.suggestion_title.replace("{count}", data.items.length.toString())}
                     </h3>
                     <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5 transition-colors">
-                      Genera una noticia neutral cruzando hechos de múltiples fuentes
+                      {t?.analyzed.suggestion_desc}
                     </p>
                   </div>
                 </div>
@@ -105,7 +105,7 @@ export default function AnalyzedPage() {
                   href="/generated"
                   className="shrink-0 px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-400 text-white dark:text-gray-950 text-sm font-bold hover:shadow-lg hover:shadow-teal-500/25 transition-all"
                 >
-                  Generar Noticia
+                  {t?.analyzed.generate_btn}
                 </Link>
               </div>
             </div>
@@ -113,7 +113,7 @@ export default function AnalyzedPage() {
 
           {data?.items.length === 0 ? (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400 bg-white dark:bg-white/[0.02] border border-gray-200 dark:border-white/5 rounded-xl shadow-sm dark:shadow-none transition-colors">
-              No hay noticias analizadas todavía.
+              {t?.analyzed.no_history}
             </div>
           ) : (
             <div className="space-y-4">
@@ -141,13 +141,13 @@ export default function AnalyzedPage() {
                         {new Date(item.created_at).toLocaleDateString()} {new Date(item.created_at).toLocaleTimeString()}
                       </span>
                       <span className="shrink-0">
-                        Modelo: <span className="text-teal-600 dark:text-teal-400 font-medium">{item.provider_used || "Desconocido"}</span>
+                        {t?.analyzed.model}<span className="text-teal-600 dark:text-teal-400 font-medium">{item.provider_used || t?.analyzed.unknown}</span>
                       </span>
                     </div>
                   </div>
                   <div className="ml-4 shrink-0">
                     <span className="flex items-center gap-1 text-teal-600 dark:text-teal-400 font-medium text-sm transition-colors">
-                      Ver Detalles
+                      {t?.analyzed.view_details}
                       <svg className="w-4 h-4 transform group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                       </svg>
@@ -164,17 +164,17 @@ export default function AnalyzedPage() {
                      disabled={page === 1}
                      className="px-4 py-2 rounded-lg bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-700 dark:text-white shadow-sm dark:shadow-none disabled:opacity-50 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
                    >
-                     Anterior
+                     {t?.analyzed.prev}
                    </button>
                    <span className="px-4 py-2 text-gray-500 dark:text-gray-400">
-                     Página {page} de {Math.ceil(data.total / data.page_size)}
+                     {t?.analyzed.page.replace("{page}", page.toString()).replace("{total}", Math.ceil(data.total / data.page_size).toString())}
                    </span>
                    <button 
                      onClick={() => setPage(p => Math.min(Math.ceil(data.total / data.page_size), p + 1))}
                      disabled={page >= Math.ceil(data.total / data.page_size)}
                      className="px-4 py-2 rounded-lg bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-700 dark:text-white shadow-sm dark:shadow-none disabled:opacity-50 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
                    >
-                     Siguiente
+                     {t?.analyzed.next}
                    </button>
                  </div>
               )}

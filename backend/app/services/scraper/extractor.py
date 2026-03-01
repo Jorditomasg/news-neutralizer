@@ -24,6 +24,7 @@ class ExtractedArticle:
     topics: list[str] = field(default_factory=list)
     is_truncated: bool = False
     paywall_indicators: list[str] = field(default_factory=list)
+    image_url: str | None = None
 
 
 class ArticleExtractor:
@@ -38,6 +39,9 @@ class ArticleExtractor:
     async def extract(self, url: str) -> ExtractedArticle:
         """Fetch a URL and extract the article content."""
         logger.info("Extracting article", url=url)
+
+        from app.core.security import validate_url_for_ssrf
+        await validate_url_for_ssrf(url)
 
         from app.services.scraper.resolvers.redirect_resolver import RedirectResolver
         resolver = RedirectResolver()
@@ -65,7 +69,7 @@ class ArticleExtractor:
 
         body = self._extract_body(soup)
         if not body:
-            raise ValueError(f"No se pudo extraer el contenido del artículo de: {resolved_url}")
+            raise ValueError(f"Could not extract article content from: {resolved_url}")
 
         # Paywall / truncation detection
         from app.services.scraper.paywall_detector import PaywallDetector
@@ -82,6 +86,7 @@ class ArticleExtractor:
             topics=self._extract_topics(soup),
             is_truncated=is_truncated,
             paywall_indicators=paywall_indicators,
+            image_url=self._extract_image_url(soup)
         )
 
     def _extract_title(self, soup: BeautifulSoup) -> str:
@@ -98,7 +103,19 @@ class ArticleExtractor:
 
         # Fallback to <title>
         title_tag = soup.find("title")
-        return title_tag.get_text(strip=True) if title_tag else "Sin título"
+        return title_tag.get_text(strip=True) if title_tag else "Untitled"
+
+    def _extract_image_url(self, soup: BeautifulSoup) -> str | None:
+        """Extract main article image URL from metadata."""
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            return str(og_image["content"]).strip()
+        
+        twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
+        if twitter_image and twitter_image.get("content"):
+            return str(twitter_image["content"]).strip()
+            
+        return None
 
     def _extract_body(self, soup: BeautifulSoup) -> str | None:
         """Extract article body text from common patterns."""

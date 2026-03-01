@@ -43,7 +43,11 @@ coverage/
 htmlcov/
 .pytest_cache/
 .coverage
+.cache/
+.ruff_cache/
+.mypy_cache/
 
 # Misc
 *.bak
 *.tmp
+test_*.txt

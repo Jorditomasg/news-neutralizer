@@ -61,7 +61,7 @@ def _update_task_progress(task_id: str, status: str, progress: int, error_messag
         session.commit()
 
 
-def _save_analysis(task_id: str, analysis, provider_name: str, extracted_articles):
+def _save_analysis(task_id: str, analysis, provider_name: str):
     """Save analysis result and update article bias scores."""
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
@@ -179,7 +179,11 @@ def _search_and_analyze_sync(
 ):
     """Synchronous implementation of the topic-based pipeline."""
     import hashlib
+    from datetime import datetime, timezone
+    from app.core.redis_utils import set_expected_duration
     from app.services.scraper.extractor import ArticleExtractor
+    
+    start_time = datetime.now(timezone.utc)
     from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.ai.clustering import SemanticClusterer
     from app.services.scraper.domain_filter import DomainFilter
@@ -199,7 +203,7 @@ def _search_and_analyze_sync(
             return
 
     # ── Topic Specificity Check (LLM, with DB cache) ──────────
-    _update_task_progress(task_id, "scraping", 2, progress_message="Validando especificidad del tema...")
+    _update_task_progress(task_id, "scraping", 2, progress_message="Validating topic specificity...")
     normalized_topic = query.strip().lower()
     topic_hash = hashlib.sha256(normalized_topic.encode()).hexdigest()
 
@@ -232,7 +236,7 @@ def _search_and_analyze_sync(
                 session.commit()
 
             if not ai_result.get("is_specific", True):
-                reason = ai_result.get("reason", "Tema demasiado genérico o ambiguo.")
+                reason = ai_result.get("reason", "Topic is too generic or ambiguous.")
                 _update_task_progress(task_id, "failed", 5, f"AMBIGUOUS_TOPIC: {reason}")
                 return
         except Exception as e:
@@ -245,13 +249,13 @@ def _search_and_analyze_sync(
     domain_filter = DomainFilter(min_trust_score=40)
 
     # ── Step 1: Search RSS feeds ──────────────────────────────
-    _update_task_progress(task_id, "scraping", 5, "Buscando noticias en modo federado (Global)...")
-    logger.info("Step 1: Searching Federated Sources", task_id=task_id, query=query)
+    _update_task_progress(task_id, "scraping", 5, "Searching news in federated mode (Global)...")
+    logger.info("Step 1: Searching Federated Sources", task_id=task_id, query=query, language=language)
 
-    hits = run_async(federator.search(query, max_results_per_provider=20))
+    hits = run_async(federator.search(query, max_results_per_provider=20, language=language))
 
     if not hits:
-        _update_task_progress(task_id, "failed", 10, "No se encontraron artículos relevantes en ninguna fuente")
+        _update_task_progress(task_id, "failed", 10, "No relevant articles found from any source")
         return
         
     # Domain Trust Filtering
@@ -259,11 +263,11 @@ def _search_and_analyze_sync(
     hits = domain_filter.filter_untrusted_hits(hits)
     
     if not hits:
-        _update_task_progress(task_id, "failed", 10, "Los resultados provenían de fuentes de baja confianza")
+        _update_task_progress(task_id, "failed", 10, "Results came from low-trust sources")
         return
 
     # Semantic Clustering Phase for manual queries
-    _update_task_progress(task_id, "scraping", 15, "Agrupando noticias por similitud semántica...")
+    _update_task_progress(task_id, "scraping", 15, "Grouping news by semantic similarity...")
     logger.info("Semantic filtering of manual query", found=len(hits))
 
     # We use DBSCAN to find the densest chunk of related news
@@ -273,7 +277,7 @@ def _search_and_analyze_sync(
     hits_to_process = filtered_hits[:8]
 
     if not hits_to_process:
-        _update_task_progress(task_id, "failed", 10, "No se pudieron agrupar semánticamente los artículos")
+        _update_task_progress(task_id, "failed", 10, "Could not semantically cluster the articles")
         return
 
     # We already have an extractor initialized at the top
@@ -284,7 +288,7 @@ def _search_and_analyze_sync(
     for i, hit in enumerate(hits_to_process):
         try:
             progress_pct = 20 + int((i / total_hits) * 30) # 20% to 50%
-            _update_task_progress(task_id, "scraping", progress_pct, f"Extrayendo noticia {i+1} de {total_hits}: {hit.source_name}...")
+            _update_task_progress(task_id, "scraping", progress_pct, f"Extracting news {i+1} of {total_hits}: {hit.source_name}...")
             
             with SyncSessionLocal() as session:
                 cache_manager = SyncCacheManager(session)
@@ -323,7 +327,7 @@ def _search_and_analyze_sync(
             continue
 
     if not extracted:
-        _update_task_progress(task_id, "failed", 50, "No se pudo extraer contenido de los artículos")
+        _update_task_progress(task_id, "failed", 50, "Could not extract content from the articles")
         return
 
     # ── Post-extraction dedup by canonical URL ────────────────
@@ -350,7 +354,7 @@ def _search_and_analyze_sync(
         for i, article in enumerate(extracted):
             # 50% to 60%
             progress_pct = 50 + int((i / len(extracted)) * 10)
-            _update_task_progress(task_id, "scraping", progress_pct, f"Guardando datos: {article.title[:20]}...")
+            _update_task_progress(task_id, "scraping", progress_pct, f"Saving data: {article.title[:20]}...")
             
             db_article = Article(
                 search_task_id=search_task.id,
@@ -375,7 +379,7 @@ def _search_and_analyze_sync(
 
     # ── Step 4: AI Analysis ───────────────────────────────────
     # ── Step 4: AI Analysis ───────────────────────────────────
-    _update_task_progress(task_id, "analyzing", 60, "Iniciando análisis de IA. Esto puede tardar unos segundos...")
+    _update_task_progress(task_id, "analyzing", 60, "Starting AI analysis. This might take a few seconds...")
     logger.info("Step 4: Running AI analysis", task_id=task_id, provider=provider_name)
 
     articles_for_ai = [
@@ -392,7 +396,7 @@ def _search_and_analyze_sync(
         provider = get_ai_provider(provider_name, encrypted_api_key, language, summary_length, bias_strictness)
         analysis = run_async(provider.analyze_articles(articles_for_ai))
     except Exception as e:
-        error_msg = f"Error en análisis AI ({provider_name}): {str(e)[:500]}"
+        error_msg = f"AI analysis error ({provider_name}): {str(e)[:500]}"
         logger.error("AI analysis failed", task_id=task_id, error=str(e))
         _update_task_progress(task_id, "failed", 60, error_msg)
         return
@@ -400,14 +404,18 @@ def _search_and_analyze_sync(
     _update_task_progress(task_id, "analyzing", 85)
 
     # ── Step 5: Save analysis ─────────────────────────────────
-    analysis_result = _save_analysis(task_id, analysis, provider_name, extracted)
+    analysis_result = _save_analysis(task_id, analysis, provider_name)
     
     with SyncSessionLocal() as session:
         cache_manager = SyncCacheManager(session)
         cache_manager.set_cached_query(query, analysis_result.id)
 
     _update_task_progress(task_id, "completed", 100)
-    logger.info("Pipeline complete", task_id=task_id)
+    
+    duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+    set_expected_duration(provider_name, duration_ms)
+    
+    logger.info("Pipeline complete", task_id=task_id, duration_ms=duration_ms)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -442,7 +450,11 @@ def _search_and_analyze_url_sync(
     language: str, summary_length: str, bias_strictness: str
 ):
     """Synchronous implementation of the URL-based pipeline (Fact-Based Analysis)."""
+    from datetime import datetime, timezone
+    from app.core.redis_utils import set_expected_duration
     from app.services.scraper.extractor import ArticleExtractor
+    
+    start_time = datetime.now(timezone.utc)
     from app.services.scraper.search_federated import FederatedSearchEngine
     from app.services.cache_manager import SyncCacheManager
     from app.services.scraper.extractor import ExtractedArticle
@@ -456,7 +468,7 @@ def _search_and_analyze_url_sync(
     provider = get_ai_provider(provider_name, encrypted_api_key, language, summary_length, bias_strictness)
 
     # ── Step 1: Extract source article from URL ───────────────
-    _update_task_progress(task_id, "scraping", 0, progress_message="Descargando contenido del artículo...")
+    _update_task_progress(task_id, "scraping", 0, progress_message="Downloading article content...")
     logger.info("URL Step 1: Extracting source article", task_id=task_id, url=url)
 
     try:
@@ -486,7 +498,7 @@ def _search_and_analyze_url_sync(
                     published_at=source_article.published_at
                 )
     except Exception as e:
-        error_msg = f"No se pudo extraer el artículo de la URL: {str(e)[:300]}"
+        error_msg = f"Could not extract article from URL: {str(e)[:300]}"
         logger.error("Source article extraction failed", task_id=task_id, error=str(e))
         _update_task_progress(task_id, "failed", 5, error_msg)
         return
@@ -500,11 +512,11 @@ def _search_and_analyze_url_sync(
         _record_paywall_hit(source_domain, True, source_article.paywall_indicators)
 
     # ── Step 1.5: Find related articles to provide context ────
-    _update_task_progress(task_id, "scraping", 5, progress_message="Buscando noticias relacionadas para comparar...")
+    _update_task_progress(task_id, "scraping", 5, progress_message="Searching for related news to compare...")
     related_hits = []
     try:
         # Use simple federated search on the title
-        related_hits = run_async(federator.search(source_article.title, max_results_per_provider=5))
+        related_hits = run_async(federator.search(source_article.title, max_results_per_provider=5, language=language))
     except Exception as e:
         logger.warning("Failed to fetch related articles during URL analysis", error=str(e))
         
@@ -514,19 +526,38 @@ def _search_and_analyze_url_sync(
         if normalize_url(hit.url) != normalize_url(source_article.source_url):
             related_articles_data.append(hit)
 
-    # ── Step 1.8: Save initial Article to database ─────────────
+    # ── Step 1.8: Normalization and Deduplication ─────────────
     with SyncSessionLocal() as session:
         stmt = select(SearchTask).where(SearchTask.task_id == task_id)
         search_task = session.execute(stmt).scalar_one()
 
+        canonical_source_url = normalize_url(source_article.source_url)
+
+        # Check for existing completed article
+        existing_stmt = select(Article).where(
+            Article.source_url == canonical_source_url,
+            Article.is_source == True,
+            Article.status == ArticleStatus.ANALYZED
+        ).order_by(Article.scraped_at.desc())
+        
+        existing_article = session.execute(existing_stmt).scalars().first()
+        
+        if existing_article:
+            logger.info("Found existing analyzed article with same canonical URL", canonical_url=canonical_source_url)
+            old_task_stmt = select(SearchTask).where(SearchTask.id == existing_article.search_task_id)
+            old_task = session.execute(old_task_stmt).scalar_one_or_none()
+            if old_task:
+                _update_task_progress(task_id, "redirected", 100, progress_message=old_task.task_id)
+                return
+
         # Update SearchTask with the resolved (canonical) URL and article title
-        search_task.source_url = source_article.source_url
+        search_task.source_url = canonical_source_url
         search_task.query = source_article.title
 
         db_article = Article(
             search_task_id=search_task.id,
             source_name=source_article.source_name,
-            source_url=source_article.source_url,
+            source_url=canonical_source_url,
             title=source_article.title,
             body=source_article.body,
             author=source_article.author[:200] if source_article.author else None,
@@ -557,7 +588,7 @@ def _search_and_analyze_url_sync(
 
     # ── Step 2: AI Analysis (Mega-Prompt) ───────────────────────
     
-    _update_task_progress(task_id, "analyzing", 10, progress_message="Analizando el artículo con IA...")
+    _update_task_progress(task_id, "analyzing", 10, progress_message="Analyzing article with AI...")
     
     articles_for_ai = [
         {
@@ -576,7 +607,7 @@ def _search_and_analyze_url_sync(
         _update_task_progress(task_id, "failed", 60, error_msg)
         return
 
-    _update_task_progress(task_id, "analyzing", 80, progress_message="Generando embeddings de los hechos encontrados...")
+    _update_task_progress(task_id, "analyzing", 80, progress_message="Generating embeddings from extracted facts...")
 
     from app.services.ai.clustering import generate_embeddings
     embeddings = generate_embeddings(analysis.objective_facts)
@@ -642,11 +673,14 @@ def _search_and_analyze_url_sync(
         search_task.status = "completed"
         search_task.progress = 100
         session.commit()
-        logger.info(f"Article analysis completed via Mega-Prompt", task_id=task_id, article_id=article_id)
+        logger.info("Article analysis completed via Mega-Prompt", task_id=task_id, article_id=article_id)
+        
+    duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+    set_expected_duration(provider_name, duration_ms)
         
     # Phase 6: Trigger check for new context availability on existing generated news
     from app.tasks.generate_tasks import check_new_context_availability
     check_new_context_availability.delay(article_id)
         
-    _update_task_progress(task_id, "completed", 100, progress_message="Análisis estructurado completado con éxito.")
+    _update_task_progress(task_id, "completed", 100, progress_message="Structured analysis completed successfully.")
     logger.info("URL pipeline complete", task_id=task_id, source_title=source_article.title[:80])

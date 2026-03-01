@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { apiClient } from "@/lib/api";
+import { useI18n } from "@/context/I18nContext";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface GeneratedNewsOut {
@@ -29,20 +32,15 @@ export default function GeneratedNewsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState(""); // Optionally implement search in backend later
+  const { t } = useI18n();
 
   const fetchNews = async (p: number) => {
     try {
       setLoading(true);
       setError(null);
-      const url = new URL(`${API_BASE}/api/v1/generate/`);
-      url.searchParams.append("page", p.toString());
-      url.searchParams.append("page_size", "15");
-
-      const res = await fetch(url.toString());
-      if (!res.ok) throw new Error("Error fetching generated news");
-      
-      const json = await res.json();
-      setData(json);
+      const url = `/api/v1/generate/?page=${p}&page_size=15`;
+      const data = await apiClient(url);
+      setData(data as PaginatedGeneratedNews);
     } catch (e: any) {
       setError(e.message || "Failed to load generated news");
     } finally {
@@ -59,7 +57,7 @@ export default function GeneratedNewsPage() {
       <div className="flex items-center gap-3 mb-8">
         <div className="h-8 w-1 rounded-full bg-gradient-to-b from-purple-500 to-pink-500 dark:from-purple-400 dark:to-pink-500" />
         <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">
-          Noticias Generadas (Consolidadas)
+          {t?.generated.title}
         </h1>
       </div>
 
@@ -75,7 +73,7 @@ export default function GeneratedNewsPage() {
         </div>
       ) : data?.items.length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-white/[0.02] border border-gray-200 dark:border-white/5 rounded-xl transition-colors">
-          Aún no se han generado noticias consolidadas basadas en hechos comprobados.
+          {t?.generated.no_news}
         </div>
       ) : (
         <div className="space-y-4">
@@ -90,7 +88,7 @@ export default function GeneratedNewsPage() {
                   <div className="absolute top-0 right-0 pt-2 pr-3">
                       <span className="inline-flex items-center gap-1.5 py-1 px-2.5 rounded-full text-xs font-semibold bg-gradient-to-r from-orange-100 to-red-100 dark:from-orange-500/20 dark:to-red-500/20 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-500/30 shadow-sm animate-pulse-slow">
                           <span className="w-1.5 h-1.5 rounded-full bg-orange-500 dark:bg-orange-400" />
-                          Nuevo Contexto Disponible
+                          {t?.generated.new_context}
                       </span>
                   </div>
               )}
@@ -111,7 +109,7 @@ export default function GeneratedNewsPage() {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             <span className="text-gray-700 dark:text-gray-300 transition-colors">
-                                Consenso Factual: <span className="text-purple-600 dark:text-purple-400 font-bold">{Math.round(item.reliability_score_achieved)}%</span>
+                                {t?.generated.factual_consensus}: <span className="text-purple-600 dark:text-purple-400 font-bold">{Math.round(item.reliability_score_achieved)}%</span>
                             </span>
                           </span>
                       )}
@@ -121,12 +119,12 @@ export default function GeneratedNewsPage() {
                       </span>
                       <span className="flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-gray-600"></span>
-                          Basado en {item.context_articles_ids.length} fuentes
+                          {t?.generated.based_on_sources.replace("{count}", item.context_articles_ids.length.toString())}
                       </span>
                   </div>
                   
                   <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium text-sm group-hover:text-purple-500 dark:group-hover:text-purple-300 transition-colors">
-                    Leer Reporte
+                    {t?.generated.read_report}
                     <svg className="w-4 h-4 transform group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                     </svg>
@@ -144,17 +142,17 @@ export default function GeneratedNewsPage() {
                  disabled={page === 1}
                  className="px-4 py-2 rounded-lg bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white disabled:opacity-50 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
                >
-                 Anterior
+                 {t?.generated.prev}
                </button>
                <span className="px-4 py-2 text-gray-600 dark:text-gray-400 transition-colors">
-                 Página {page} de {Math.ceil(data.total / data.page_size)}
+                 {t?.generated.page.replace("{page}", page.toString()).replace("{total}", Math.ceil(data.total / data.page_size).toString())}
                </span>
                <button 
                  onClick={() => setPage(p => Math.min(Math.ceil(data.total / data.page_size), p + 1))}
                  disabled={page >= Math.ceil(data.total / data.page_size)}
                  className="px-4 py-2 rounded-lg bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-900 dark:text-white disabled:opacity-50 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors"
                >
-                 Siguiente
+                 {t?.generated.next}
                </button>
              </div>
           )}

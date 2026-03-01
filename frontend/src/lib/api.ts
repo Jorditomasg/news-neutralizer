@@ -2,11 +2,13 @@
  * API client for communicating with the News Neutralizer backend.
  */
 
-import { getSessionId, sessionHeaders } from "./session";
+import { sessionHeaders } from "./session";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-export { getSessionId, sessionHeaders };
+const SESSION_KEY = "news-neutralizer-session-id";
+
+export { sessionHeaders };
 
 export class ApiError extends Error {
   constructor(
@@ -18,15 +20,42 @@ export class ApiError extends Error {
   }
 }
 
+export async function getValidSessionToken(): Promise<string> {
+  if (typeof window === "undefined") return "default";
+
+  let token = localStorage.getItem(SESSION_KEY);
+  
+  // If no token exists, or if it looks like an old UUID (< 100 chars), fetch a JWT
+  if (!token || token.length < 100) {
+    const res = await fetch(`${API_BASE}/api/v1/auth/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_session_id: token || undefined }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      token = data.access_token;
+      if (token) {
+        localStorage.setItem(SESSION_KEY, token);
+      }
+    }
+  }
+  return token || "default";
+}
+
 export async function apiClient<T>(
   endpoint: string,
   options?: RequestInit,
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
+  
+  // Ensure we have a valid JWT before making the request
+  const token = await getValidSessionToken();
 
   const res = await fetch(url, {
     headers: {
       ...sessionHeaders(),
+      "X-Session-ID": token,
       ...options?.headers,
     },
     ...options,

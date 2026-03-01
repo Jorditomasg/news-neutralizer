@@ -8,8 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --prefix=/install .
+RUN pip install --no-cache-dir .
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -28,8 +31,9 @@ WORKDIR /app
 RUN mkdir -p /app/.cache && chown -R app:app /app/.cache
 ENV HF_HOME=/app/.cache/huggingface
 
-# Copy installed packages
-COPY --from=builder /install /usr/local
+# Copy virtual environment
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
 COPY ./app ./app

@@ -13,6 +13,9 @@ from app.models import SearchTask
 router = APIRouter()
 
 
+from app.core.redis_utils import get_expected_duration
+from app.api.deps import _get_user_ai_config
+
 @router.websocket("/ws/tasks/{task_id}")
 async def task_progress(websocket: WebSocket, task_id: str):
     """
@@ -40,7 +43,7 @@ async def task_progress(websocket: WebSocket, task_id: str):
                         "task_id": task_id,
                         "status": "not_found",
                         "progress": 0,
-                        "message": "Tarea no encontrada",
+                        "message": "Task not found",
                     })
                     break
 
@@ -55,10 +58,13 @@ async def task_progress(websocket: WebSocket, task_id: str):
                 for a in task.articles:
                     if getattr(a, 'is_truncated', False):
                         warnings.append(
-                            f"⚠️ El medio {a.source_name} parece tener contenido de pago. "
-                            f"El artículo podría estar incompleto y el análisis podría no ser fiable."
+                            f"⚠️ The source {a.source_name} appears to have a paywall. "
+                            f"The article might be incomplete and the analysis may not be reliable."
                         )
                         break
+
+                provider_name, _ = await _get_user_ai_config(session, "session_id_not_needed_for_ws")
+                ema_ms = get_expected_duration(provider_name)
 
                 await websocket.send_json({
                     "task_id": task.task_id,
@@ -68,6 +74,7 @@ async def task_progress(websocket: WebSocket, task_id: str):
                     "error_message": task.error_message,
                     "message": message,
                     "warnings": warnings,
+                    "expected_duration_ms": ema_ms,
                 })
 
                 # Stop polling if task is done
@@ -83,11 +90,11 @@ async def task_progress(websocket: WebSocket, task_id: str):
 def _status_message(status: str, progress: int) -> str:
     """Generate a human-readable status message."""
     messages = {
-        "pending": "Iniciando búsqueda...",
-        "scraping": "Extrayendo artículos",
-        "analyzing": "Analizando sesgo con IA",
-        "completed": "✅ Análisis completado",
-        "failed": "❌ Error en el análisis",
-        "preview": "Vista previa del artículo",
+        "pending": "Starting search...",
+        "scraping": "Extracting articles...",
+        "analyzing": "Analyzing bias with AI...",
+        "completed": "✅ Analysis completed",
+        "failed": "❌ Analysis error",
+        "preview": "Article preview",
     }
-    return messages.get(status, f"Estado: {status}")
+    return messages.get(status, f"Status: {status}")

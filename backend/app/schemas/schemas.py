@@ -57,6 +57,8 @@ class ArticlePreviewResponse(BaseModel):
     published_at: datetime | None = None
     topics: list[str] = []
     has_paywall: bool = False
+    image_url: str | None = None
+    body: str | None = None
 
 
 
@@ -153,9 +155,10 @@ class PaginatedHistoryOut(BaseModel):
 
 
 class TaskCreated(BaseModel):
-    """Response when a new search task is created."""
-    task_id: str
-    message: str = "Task created successfully"
+    """Response when a search/analysis task is started."""
+
+    task_id: str = Field(..., description="Unique ID for the background task")
+    expected_duration_ms: int | None = Field(None, description="Expected duration in milliseconds based on the AI model chosen")
 
 
 class APIKeyOut(BaseModel):

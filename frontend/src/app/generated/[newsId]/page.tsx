@@ -6,7 +6,8 @@ import Link from "next/link";
 import { Article } from "@/types"; // Alias it inside if needed, or replace ArticleOut with Article
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-import { sessionHeaders } from "@/lib/session";
+import { apiClient } from "@/lib/api";
+import { useI18n } from "@/context/I18nContext";
 
 interface StructuredFactSummaryOut {
     id: number;
@@ -41,6 +42,7 @@ export default function GeneratedNewsDetailPage() {
   const [news, setNews] = useState<GeneratedNewsDetailOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!newsId) return;
@@ -48,14 +50,8 @@ export default function GeneratedNewsDetailPage() {
     const fetchDetail = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE}/api/v1/generate/${newsId}`, { headers: sessionHeaders() });
-        if (!res.ok) {
-            if (res.status === 404) throw new Error("Noticia generada no encontrada.");
-            throw new Error("Error al cargar la noticia generada.");
-        }
-        
-        const data = await res.json();
-        setNews(data);
+        const data = await apiClient(`/api/v1/generate/${newsId}`);
+        setNews(data as GeneratedNewsDetailOut);
       } catch (e: any) {
         setError(e.message);
       } finally {
@@ -86,12 +82,12 @@ export default function GeneratedNewsDetailPage() {
     return (
       <div className="max-w-4xl mx-auto py-12 px-6">
         <div className="text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 p-6 rounded-2xl border border-red-200 dark:border-red-500/20 text-center transition-colors">
-          <p className="mb-4">{error || "No se pudo cargar la información."}</p>
+          <p className="mb-4">{error || t?.generated.error_load}</p>
           <button 
             onClick={() => router.push("/generated")}
             className="px-4 py-2 bg-gray-100 dark:bg-white/10 hover:bg-gray-200 dark:hover:bg-white/20 rounded-lg transition-colors text-gray-900 dark:text-white text-sm font-medium"
           >
-            Volver a Noticias Generadas
+            {t?.generated.back_button}
           </button>
         </div>
       </div>
@@ -126,7 +122,7 @@ export default function GeneratedNewsDetailPage() {
   };
 
   // Group facts by their type or just display them
-  const facts = news.traces.map(t => t.structured_fact).filter(f => f.type === "FACT");
+  const facts = news.traces.map(t => t?.structured_fact).filter(f => f.type === "FACT");
 
   return (
     <div className="max-w-4xl mx-auto py-10 px-6 animate-fade-in">
@@ -134,7 +130,7 @@ export default function GeneratedNewsDetailPage() {
         <svg className="w-4 h-4 mr-2 transform group-hover:-translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
         </svg>
-        Volver a Noticias Generadas
+        {t?.generated.back_button}
       </Link>
 
       <article className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/5 rounded-3xl p-8 sm:p-12 shadow-sm dark:shadow-2xl relative overflow-hidden transition-colors">
@@ -145,7 +141,7 @@ export default function GeneratedNewsDetailPage() {
           <div className="flex flex-wrap items-center gap-3 mb-6">
             <span className="inline-flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-semibold bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-500/20 transition-colors">
               <span className="w-1.5 h-1.5 rounded-full bg-purple-500 dark:bg-purple-400 animate-pulse" />
-              Noticia Consolidada Autogenerada
+              {t?.generated.badge}
             </span>
             <span className="text-sm text-gray-500 font-medium transition-colors">
               {new Date(news.created_at).toLocaleDateString("es-ES", { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -165,7 +161,7 @@ export default function GeneratedNewsDetailPage() {
         <div className="flex flex-wrap gap-4 py-6 border-y border-gray-100 dark:border-white/5 mb-10 bg-gray-50/50 dark:bg-white/[0.01] -mx-8 px-8 sm:-mx-12 sm:px-12 transition-colors">
             {news.reliability_score_achieved !== null && (
                 <div className="flex flex-col">
-                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">Consenso Factual</span>
+                    <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">{t?.generated.factual_consensus}</span>
                     <span className="text-2xl font-display font-bold text-purple-600 dark:text-purple-400 transition-colors">
                         {Math.round(news.reliability_score_achieved)}%
                     </span>
@@ -173,14 +169,14 @@ export default function GeneratedNewsDetailPage() {
             )}
             <div className="w-px h-12 bg-gray-200 dark:bg-white/10 hidden sm:block mx-4 transition-colors" />
             <div className="flex flex-col">
-                <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">Fuentes Analizadas</span>
+                <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">{t?.generated.analyzed_sources}</span>
                 <span className="text-2xl font-display font-bold text-gray-900 dark:text-white transition-colors">
                     {news.context_articles_ids.length}
                 </span>
             </div>
             <div className="w-px h-12 bg-gray-200 dark:bg-white/10 hidden sm:block mx-4 transition-colors" />
             <div className="flex flex-col">
-                <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">Hechos Nucleares</span>
+                <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1 transition-colors">{t?.generated.nuclear_facts}</span>
                 <span className="text-2xl font-display font-bold text-gray-900 dark:text-white transition-colors">
                     {facts.length}
                 </span>
@@ -200,11 +196,11 @@ export default function GeneratedNewsDetailPage() {
                 <svg className="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
                 </svg>
-                Trazabilidad Numérica
+                {t?.generated.numeric_traceability}
             </h3>
             
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/5 rounded-2xl p-6 shadow-sm dark:shadow-none transition-colors">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 transition-colors">Esta noticia ha sido redactada estructurando exclusivamente los siguientes hechos, verificados transversalmente por el motor de IA.</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-6 transition-colors">{t?.generated.traceability_desc}</p>
                 <div className="grid gap-4">
                     {facts.map((fact, idx) => (
                         <div key={fact.id} className="flex gap-4 items-start p-4 bg-gray-50/50 dark:bg-white/[0.02] rounded-xl border border-gray-100 dark:border-white/5 transition-colors">
@@ -214,7 +210,7 @@ export default function GeneratedNewsDetailPage() {
                             <div className="flex-1">
                                 <p className="text-gray-800 dark:text-gray-200 text-sm leading-relaxed transition-colors">{fact.content}</p>
                                 <div className="mt-3 flex items-center gap-2 text-xs text-gray-500 transition-colors">
-                                    <span className="font-medium text-gray-700 dark:text-gray-400">Origen interno:</span> Artículo ID #{fact.article_id}
+                                    <span className="font-medium text-gray-700 dark:text-gray-400">{t?.generated.internal_origin}</span> {t?.generated.article_id.replace("{id}", fact.article_id.toString())}
                                 </div>
                             </div>
                         </div>
@@ -229,7 +225,7 @@ export default function GeneratedNewsDetailPage() {
                 <svg className="w-6 h-6 text-teal-600 dark:text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                 </svg>
-                Fuentes Originales Contrastadas
+                {t?.generated.contrasted_sources}
             </h3>
 
             <div className="grid sm:grid-cols-2 gap-4">
@@ -247,7 +243,7 @@ export default function GeneratedNewsDetailPage() {
                             </span>
                             {article.bias_score !== null && (
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border transition-colors ${article.bias_score > 0.6 ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 border-red-200 dark:border-red-500/20' : 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 border-green-200 dark:border-green-500/20'}`}>
-                                    Sesgo: {Math.round(article.bias_score * 100)}%
+                                    {t?.generated.bias.replace("{score}", Math.round(article.bias_score * 100).toString())}
                                 </span>
                             )}
                         </div>
@@ -257,7 +253,7 @@ export default function GeneratedNewsDetailPage() {
                         <div className="mt-auto pt-4 flex items-center justify-between text-xs text-gray-500 border-t border-gray-100 dark:border-white/5 transition-colors">
                             <span>{new Date(article.published_at || article.analyzed_at || '').toLocaleDateString()}</span>
                             <span className="flex items-center gap-1 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">
-                                Leer Original
+                                {t?.generated.read_original}
                                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                                 </svg>

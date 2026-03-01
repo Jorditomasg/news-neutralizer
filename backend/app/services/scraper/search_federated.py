@@ -31,7 +31,7 @@ class SearchProvider(ABC):
         pass
         
     @abstractmethod
-    async def search(self, query: str, max_results: int = 10) -> List[ArticleHit]:
+    async def search(self, query: str, max_results: int = 10, language: str = "es") -> List[ArticleHit]:
         """Execute the search and return normalized hits."""
         pass
 
@@ -43,15 +43,26 @@ class DuckDuckGoNewsProvider(SearchProvider):
     def name(self) -> str:
         return "duckduckgo"
         
-    async def search(self, query: str, max_results: int = 15) -> List[ArticleHit]:
-        logger.info("Searching DDG News", query=query)
+    async def search(self, query: str, max_results: int = 15, language: str = "es") -> List[ArticleHit]:
+        logger.info("Searching DDG News", query=query, language=language)
         hits = []
         try:
-            # DDGS is synchronous by default, so we wrap it in an executor
+            # Map simple language to DDG region format
+            lang = language.lower()[:2]
+            region_map = {
+                "en": "us-en",
+                "es": "es-es",
+                "fr": "fr-fr",
+                "de": "de-de",
+                "it": "it-it",
+                "pt": "br-pt",
+            }
+            region = region_map.get(lang, "wt-wt")
+
             def _do_search():
                 with DDGS() as ddgs:
                     # 'timelimit' can be 'd' (day), 'w' (week), 'm' (month)
-                    results = list(ddgs.news(query, max_results=max_results, timelimit="w"))
+                    results = list(ddgs.news(query, region=region, max_results=max_results, timelimit="w"))
                     return results
 
             results = await asyncio.to_thread(_do_search)
@@ -79,12 +90,15 @@ class GoogleNewsRSSProvider(SearchProvider):
     def name(self) -> str:
         return "google_news"
         
-    async def search(self, query: str, max_results: int = 15) -> List[ArticleHit]:
+    async def search(self, query: str, max_results: int = 15, language: str = "es") -> List[ArticleHit]:
         from urllib.parse import quote_plus
+        from app.services.scraper.google_news import _get_gnews_params
         
-        logger.info("Searching Google News RSS", query=query)
+        logger.info("Searching Google News RSS", query=query, language=language)
         encoded_query = quote_plus(query)
-        url = f"https://news.google.com/rss/search?q={encoded_query}&hl=es&gl=ES&ceid=ES:es"
+        loc_params = _get_gnews_params(language)
+        
+        url = f"https://news.google.com/rss/search?q={encoded_query}&{loc_params}"
         
         hits = []
         try:
@@ -150,18 +164,19 @@ class FederatedSearchEngine:
             
         return resolved_hits
         
-    async def search(self, query: str, max_results_per_provider: int = 20) -> List[ArticleHit]:
+    async def search(self, query: str, max_results_per_provider: int = 20, language: str = "es") -> List[ArticleHit]:
         """
         Runs all providers concurrently and merges the results.
-        Resolves Google News redirects, then deduplicates by normalized URL.
+        Resolves Google News redirects, verifies language, and deduplicates by normalized URL.
         """
         from app.services.scraper.url_utils import normalize_url
+        from app.services.scraper.language_detector import language_detector
         
         if not query.strip():
             return []
             
         tasks = [
-            provider.search(query, max_results=max_results_per_provider)
+            provider.search(query, max_results=max_results_per_provider, language=language)
             for provider in self.providers
         ]
         
@@ -177,21 +192,42 @@ class FederatedSearchEngine:
                 continue
             raw_hits.extend(result)
         
-        # Resolve Google News URLs to canonical destinations
+        # Resolving Google News URLs to canonical destinations
         resolved_hits = await self._resolve_google_news_urls(raw_hits)
         
         # Deduplicate by normalized URL (prefers first occurrence — DDG runs before GNews)
-        all_hits = []
+        # Also, perform fast language detection and scoring
+        
+        target_lang_code = language.lower()[:2]
+        scored_hits = []
         seen_normalized = set()
         
         for hit in resolved_hits:
             norm = normalize_url(hit.url)
             if norm not in seen_normalized:
                 seen_normalized.add(norm)
-                all_hits.append(hit)
+                
+                # Fast language detection using title + snippet
+                text_to_analyze = f"{hit.title} {hit.snippet or ''}".strip()
+                detected_lang = language_detector.detect_language(text_to_analyze)
+                
+                # Default score
+                score = 1.0
+                
+                if detected_lang:
+                    if detected_lang == target_lang_code:
+                        score = 2.0 # Boost if language matches exactly
+                    else:
+                        score = 0.5 # Penalize if language is definitively different
+                
+                scored_hits.append((score, hit))
             else:
-                logger.info("Duplicate URL removed", url=hit.url[:80], normalized=norm[:80])
+                logger.debug("Duplicate URL removed", url=hit.url[:80], normalized=norm[:80])
+                
+        # Sort completely by score (descending)
+        scored_hits.sort(key=lambda x: x[0], reverse=True)
+        all_hits = [hit for score, hit in scored_hits]
                     
         logger.info("Federated search complete", query=query, 
-                     total_raw=len(raw_hits), after_dedup=len(all_hits))
+                     total_raw=len(raw_hits), after_dedup=len(all_hits), target_lang=target_lang_code)
         return all_hits

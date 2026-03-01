@@ -2,12 +2,14 @@
 
 import { useEffect } from "react";
 import { useTaskContext, TaskItem } from "@/context/TaskContext";
+import { useI18n } from "@/context/I18nContext";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
 // Child component to handle individual task WebSocket connection
 function TaskConnection({ task }: { task: TaskItem }) {
   const { updateTaskProgress, completeTask, failTask } = useTaskContext();
+  const { t } = useI18n();
 
   useEffect(() => {
     if (task.status === "completed" || task.status === "error") return;
@@ -18,13 +20,13 @@ function TaskConnection({ task }: { task: TaskItem }) {
       const data = JSON.parse(event.data);
       
       if (data.status === "completed") {
-        completeTask(task.id, "Hechos extraídos, listos para generar noticia neutral.");
+        completeTask(task.id, t?.tasks.completed);
         ws.close();
       } else if (data.status === "failed") {
-        failTask(task.id, data.error_message || "Ocurrió un error al procesar la noticia.");
+        failTask(task.id, data.error_message || t?.tasks.error);
         ws.close();
       } else if (data.status === "not_found") {
-        failTask(task.id, data.message || "Tarea no encontrada en el servidor.");
+        failTask(task.id, data.message || t?.tasks.error);
         ws.close();
       } else {
         const progress = data.progress || 0;
@@ -42,7 +44,7 @@ function TaskConnection({ task }: { task: TaskItem }) {
         ws.close();
       }
     };
-  }, [task.id, task.status, completeTask, failTask, updateTaskProgress]);
+  }, [task.id, task.status, completeTask, failTask, updateTaskProgress, t]);
 
   return null;
 }
@@ -54,7 +56,7 @@ export function GlobalTaskTracker() {
     <>
       {/* Invisible workers to manage WebSocket connections for active tasks */}
       {tasks
-        .filter(t => t.status === "pending" || t.status === "active")
+        .filter(t => t?.status === "pending" || t?.status === "active")
         .map(task => (
           <TaskConnection key={task.id} task={task} />
         ))}

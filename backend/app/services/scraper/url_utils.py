@@ -36,8 +36,8 @@ def normalize_url(url: str) -> str:
     except Exception:
         return url
 
-    # Lowercase scheme and host
-    scheme = parsed.scheme.lower()
+    # Force HTTPS scheme and lowercase host
+    scheme = "https"
     netloc = parsed.netloc.lower()
 
     # Remove www. prefix
