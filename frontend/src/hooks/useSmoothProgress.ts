@@ -25,7 +25,7 @@ function saveTaskProgress(id: string, displayProgress: number) {
                 updatedAt: now
             }));
             lastSaveMap.set(id, now);
-        } catch (e) {}
+        } catch { /* ignored */ }
     }
 }
 
@@ -63,7 +63,7 @@ function getSavedProgress(id: string, backendProgress: number, expectedDurationM
         }
         
         return Math.max(newDisplay, backendProgress);
-    } catch (e) {
+    } catch {
         return backendProgress;
     }
 }
@@ -92,7 +92,7 @@ function startTicker() {
                  return;
             }
 
-            let prev = task.displayProgress;
+            const prev = task.displayProgress;
             let next = prev;
 
             if (prev >= task.backendProgress) {

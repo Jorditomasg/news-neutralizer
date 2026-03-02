@@ -1,15 +1,25 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useTaskContext } from "@/context/TaskContext";
-import Link from "next/link";
+import { useTaskContext, type TaskItem } from "@/context/TaskContext";
 import { useRouter } from "next/navigation";
 import { useSmoothProgress } from "@/hooks/useSmoothProgress";
-import { useI18n } from "@/context/I18nContext";
 
-function NotificationTaskItem({ task, removeTask, router, setIsOpen, getStatusColor, getStatusIcon }: any) {
+function NotificationTaskItem({ task, removeTask, router, setIsOpen, getStatusColor, getStatusIcon }: Readonly<{
+  task: TaskItem;
+  removeTask: (id: string) => void;
+  router: ReturnType<typeof useRouter>;
+  setIsOpen: (open: boolean) => void;
+  getStatusColor: (status: string) => string;
+  getStatusIcon: (status: string) => string;
+}>) {
   const { displayProgress } = useSmoothProgress(task.id, task.progress, task.status);
-  const { t } = useI18n();
+
+  const getProgressBarColor = (status: string): string => {
+    if (status === "error") return "bg-red-500";
+    if (status === "completed") return "bg-teal-500";
+    return "bg-gradient-to-r from-cyan-500 to-teal-400 dark:from-cyan-400 dark:to-teal-400";
+  };
   
   return (
     <li className="p-4 hover:bg-gray-50 dark:hover:bg-white/[0.02] transition-colors group">
@@ -49,11 +59,7 @@ function NotificationTaskItem({ task, removeTask, router, setIsOpen, getStatusCo
           {/* Miniature Progress Bar */}
           <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden mb-2 transition-colors">
             <div 
-              className={`h-full rounded-full transition-all duration-300 ease-out ${
-                task.status === "error" ? "bg-red-500" :
-                task.status === "completed" ? "bg-teal-500" :
-                "bg-gradient-to-r from-cyan-500 to-teal-400 dark:from-cyan-400 dark:to-teal-400"
-              }`}
+              className={`h-full rounded-full transition-all duration-300 ease-out ${getProgressBarColor(task.status)}`}
               style={{ width: `${Math.max(2, displayProgress)}%` }}
             />
           </div>
@@ -81,7 +87,6 @@ export function NotificationCenter() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-  const { t } = useI18n();
 
   const activeTasksCount = tasks.filter(t => t.status === "active" || t.status === "pending").length;
   const hasUnread = tasks.length > 0; // Simple unread logic for now
@@ -128,14 +133,20 @@ export function NotificationCenter() {
         </svg>
         
         {/* Active badge */}
-        {activeTasksCount > 0 ? (
-          <span className="absolute top-1 right-1 flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-teal-500 border-2 border-gray-950"></span>
-          </span>
-        ) : hasUnread ? (
-          <span className="absolute top-1.5 right-1.5 block h-2 w-2 rounded-full bg-cyan-500 border border-gray-950"></span>
-        ) : null}
+        {(() => {
+          if (activeTasksCount > 0) {
+            return (
+              <span className="absolute top-1 right-1 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-teal-500 border-2 border-gray-950"></span>
+              </span>
+            );
+          }
+          if (hasUnread) {
+            return <span className="absolute top-1.5 right-1.5 block h-2 w-2 rounded-full bg-cyan-500 border border-gray-950"></span>;
+          }
+          return null;
+        })()}
       </button>
 
       {/* Dropdown Menu */}
@@ -170,7 +181,7 @@ export function NotificationCenter() {
             )}
           </div>
           
-          {tasks.filter(t => t.status === "completed" || t.status === "error").length > 0 && (
+          {tasks.some(t => t.status === "completed" || t.status === "error") && (
             <div className="p-2 border-t border-gray-100 dark:border-white/5 bg-gray-50 dark:bg-gray-950/30 transition-colors">
               <button 
                 onClick={clearCompletedTasks}

@@ -16,7 +16,7 @@ interface Step {
   status: StepStatus;
 }
 
-export function SearchProgress({ status, progress, message, expectedDurationMs }: SearchProgressProps) {
+export function SearchProgress({ status, progress, message, expectedDurationMs }: Readonly<SearchProgressProps>) {
   const { t } = useI18n();
   const formatTime = (ms: number) => {
       const totalSeconds = Math.floor(ms / 1000);
@@ -53,6 +53,18 @@ export function SearchProgress({ status, progress, message, expectedDurationMs }
     ];
   }, [status, progress, t]);
 
+  const getNodeStyle = (stepStatus: StepStatus): string => {
+    if (stepStatus === "completed") return "border-teal-500 bg-teal-50 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400 shadow-[0_0_15px_rgba(20,184,166,0.1)]";
+    if (stepStatus === "active") return "border-teal-400 ring-4 ring-teal-500/20 shadow-[0_0_20px_rgba(45,212,191,0.3)] text-teal-500";
+    return "border-gray-200 dark:border-gray-800 text-gray-400 dark:text-gray-600";
+  };
+
+  const getLabelStyle = (stepStatus: StepStatus): string => {
+    if (stepStatus === "active") return "text-gray-900 dark:text-teal-300 transform scale-105";
+    if (stepStatus === "completed") return "text-gray-600 dark:text-teal-200/60";
+    return "text-gray-400 dark:text-gray-600";
+  };
+
   return (
     <div className="w-full max-w-4xl mx-auto my-6 animate-fade-in relative z-20">
       <div className="relative overflow-hidden py-4 transition-colors">
@@ -87,22 +99,18 @@ export function SearchProgress({ status, progress, message, expectedDurationMs }
                     </div>
                  
                     {/* Circle Node */}
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 mb-4 transition-all duration-500 bg-white dark:bg-gray-900 relative ${
-                        isCompleted 
-                          ? "border-teal-500 bg-teal-50 dark:bg-teal-500/10 text-teal-600 dark:text-teal-400 shadow-[0_0_15px_rgba(20,184,166,0.1)]" 
-                          : isActive 
-                            ? "border-teal-400 ring-4 ring-teal-500/20 shadow-[0_0_20px_rgba(45,212,191,0.3)] text-teal-500" 
-                            : "border-gray-200 dark:border-gray-800 text-gray-400 dark:text-gray-600"
-                    }`}>
-                      {isCompleted ? (
-                         <svg className="w-5 h-5 animate-[scale-in_0.3s_ease-out]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                         </svg>
-                      ) : isActive ? (
-                         <div className="w-3 h-3 rounded-full bg-teal-500 animate-[ping_1.5s_cubic-bezier(0,0,0.2,1)_infinite] opacity-80" />
-                      ) : (
-                         <span className="text-sm font-bold">{index + 1}</span>
-                      )}
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 mb-4 transition-all duration-500 bg-white dark:bg-gray-900 relative ${getNodeStyle(step.status)}`}>
+                      {(() => {
+                         if (isCompleted) return (
+                           <svg className="w-5 h-5 animate-[scale-in_0.3s_ease-out]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                           </svg>
+                         );
+                         if (isActive) return (
+                           <div className="w-3 h-3 rounded-full bg-teal-500 animate-[ping_1.5s_cubic-bezier(0,0,0.2,1)_infinite] opacity-80" />
+                         );
+                         return <span className="text-sm font-bold">{index + 1}</span>;
+                       })()}
                       
                       {/* Active breathing outer glow */}
                       {isActive && (
@@ -111,11 +119,7 @@ export function SearchProgress({ status, progress, message, expectedDurationMs }
                     </div>
                     
                     {/* Step Label */}
-                    <div className={`text-xs md:text-sm font-semibold transition-all duration-500 ${
-                      isActive ? "text-gray-900 dark:text-teal-300 transform scale-105" :
-                      isCompleted ? "text-gray-600 dark:text-teal-200/60" :
-                      "text-gray-400 dark:text-gray-600"
-                    }`}>
+                    <div className={`text-xs md:text-sm font-semibold transition-all duration-500 ${getLabelStyle(step.status)}`}>
                         {step.label}
                     </div>
                  </div>

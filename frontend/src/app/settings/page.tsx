@@ -61,7 +61,7 @@ export default function SettingsPage() {
             headers: sessionHeaders(),
           });
         }
-        setFeedback(t?.prefs.saved);
+        setFeedback(t.prefs.saved);
         setInputValue("");
         await fetchKeys();
       } else {
@@ -77,15 +77,15 @@ export default function SettingsPage() {
         });
 
         if (res.ok) {
-          setFeedback(t?.prefs.saved);
+          setFeedback(t.prefs.saved);
           setInputValue("");
           await fetchKeys();
         } else {
-          setFeedback(t?.prefs.error);
+          setFeedback(t.prefs.error);
         }
       }
-    } catch (e) {
-      setFeedback(t?.prefs.error);
+    } catch {
+      setFeedback(t.prefs.error);
     } finally {
       setSaving(false);
       setTimeout(() => setFeedback(""), 3000);
@@ -93,11 +93,11 @@ export default function SettingsPage() {
   };
 
   const getProviderName = (id: AIProvider) => {
-    return t?.settings.provider[id as keyof typeof t?.settings.provider] || id;
+    return t.settings.provider[id as keyof typeof t.settings.provider] || id;
   };
   
   const getProviderDesc = (id: AIProvider) => {
-    return t?.settings.provider[`${id}_desc` as keyof typeof t?.settings.provider] || "";
+    return t.settings.provider[`${id}_desc` as keyof typeof t.settings.provider] || "";
   };
   
   const selectedProviderConf = PROVIDERS.find(p => p.id === activeProvider);
@@ -106,21 +106,21 @@ export default function SettingsPage() {
   return (
     <div className="animate-fade-in max-w-2xl mx-auto space-y-10">
       <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white">{t?.settings.title}</h1>
-        <p className="mt-2 text-gray-500 dark:text-gray-400">{t?.settings.description}</p>
+        <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white">{t.settings.title}</h1>
+        <p className="mt-2 text-gray-500 dark:text-gray-400">{t.settings.description}</p>
       </div>
 
       {/* Preferences Section */}
       <section className="space-y-6">
         <div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1">{t?.prefs.preferences}</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-500">{t?.prefs.preferences_desc}</p>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1">{t.prefs.preferences}</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-500">{t.prefs.preferences_desc}</p>
         </div>
 
         <div className="grid gap-6 md:grid-cols-2">
           {/* Language Selector */}
           <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t?.prefs.language}</label>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t.prefs.language}</label>
             <select
               value={locale}
               onChange={(e) => setLocale(e.target.value as Parameters<typeof setLocale>[0])}
@@ -136,7 +136,7 @@ export default function SettingsPage() {
 
           {/* AI Provider Selector */}
           <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t?.prefs.ai_model}</label>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t.prefs.ai_model}</label>
             <select
               value={activeProvider}
               onChange={(e) => {
@@ -159,28 +159,28 @@ export default function SettingsPage() {
 
           {/* Summary Length Selector */}
           <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t?.prefs.summaryLength}</label>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t.prefs.summaryLength}</label>
             <select
               value={summaryLength}
               onChange={(e) => setSummaryLength(e.target.value)}
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
-              <option value="short" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t?.prefs.summaryLength_short}</option>
-              <option value="medium" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t?.prefs.summaryLength_medium}</option>
-              <option value="long" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t?.prefs.summaryLength_long}</option>
+              <option value="short" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_short}</option>
+              <option value="medium" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_medium}</option>
+              <option value="long" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.summaryLength_long}</option>
             </select>
           </div>
 
           {/* Bias Strictness Selector */}
           <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-5 shadow-sm dark:shadow-none">
-            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t?.prefs.biasStrictness}</label>
+            <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">{t.prefs.biasStrictness}</label>
             <select
               value={biasStrictness}
               onChange={(e) => setBiasStrictness(e.target.value)}
               className="w-full rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-teal-500/40 dark:focus:border-teal-400/40 focus:ring-1 focus:ring-teal-500/20 transition-colors"
             >
-              <option value="standard" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t?.prefs.biasStrictness_standard}</option>
-              <option value="strict" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t?.prefs.biasStrictness_strict}</option>
+              <option value="standard" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.biasStrictness_standard}</option>
+              <option value="strict" className="bg-white dark:bg-[#1a1a1a] text-gray-900 dark:text-white">{t.prefs.biasStrictness_strict}</option>
             </select>
           </div>
         </div>
@@ -189,14 +189,14 @@ export default function SettingsPage() {
       {/* Security Notice */}
       <div className="rounded-2xl border border-teal-200 dark:border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-4">
         <p className="text-sm text-teal-800 dark:text-teal-300">
-          {t?.settings.securityNotice}
+          {t.settings.securityNotice}
         </p>
       </div>
 
       {/* API Key Input Section (Conditional) */}
       <section className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-6 shadow-sm dark:shadow-none">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-gray-900 dark:text-white">{t?.prefs.provider}: {getProviderName(activeProvider)}</h3>
+          <h3 className="font-semibold text-gray-900 dark:text-white">{t.prefs.provider}: {getProviderName(activeProvider)}</h3>
           {isKeySavedForProvider && activeProvider !== "ollama" && (
             <span className="text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 border border-emerald-200 dark:border-transparent rounded-lg px-2 py-1 flex items-center gap-1">
               ✅ Configurada
@@ -205,7 +205,7 @@ export default function SettingsPage() {
         </div>
         
         {activeProvider === "ollama" ? (
-          <p className="text-sm text-gray-600 dark:text-gray-400 py-2">{t?.prefs.ollamaNoKey}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400 py-2">{t.prefs.ollamaNoKey}</p>
         ) : (
           <div className="flex gap-2">
             <input
@@ -220,7 +220,7 @@ export default function SettingsPage() {
               disabled={(!inputValue.trim() && !isKeySavedForProvider) || saving}
               className="rounded-xl bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400 hover:bg-teal-200 dark:hover:bg-teal-500/30 px-6 py-2 text-sm font-bold transition-all disabled:opacity-30 disabled:hover:bg-teal-100 dark:disabled:hover:bg-teal-500/20 flex items-center justify-center min-w-[100px]"
             >
-              {saving ? "..." : t?.prefs.save}
+              {saving ? "..." : t.prefs.save}
             </button>
           </div>
         )}

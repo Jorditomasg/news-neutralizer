@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useState } from "react";
+import { useIsClient } from "@/hooks/useIsClient";
 
 type Theme = "light" | "dark";
 
@@ -11,48 +12,42 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
-  const [mounted, setMounted] = useState(false);
+export function ThemeProvider({ children }: Readonly<{ children: React.ReactNode }>) {
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (globalThis.window === undefined) return "light";
+    const storedTheme = localStorage.getItem("theme") as Theme | null;
+    if (storedTheme) return storedTheme;
+    const isDarkMode = globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches;
+    return isDarkMode ? "dark" : "light";
+  });
+  const isClient = useIsClient();
 
   useEffect(() => {
-    setMounted(true);
-    // Get stored theme or default to light
-    const storedTheme = localStorage.getItem("theme") as Theme | null;
-    if (storedTheme) {
-      setTheme(storedTheme);
-      if (storedTheme === "dark") {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
-    } else {
-      // Default to browser preference
-      const isDarkMode = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-      setTheme(isDarkMode ? "dark" : "light");
-      if (isDarkMode) {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const newTheme = theme === "light" ? "dark" : "light";
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
-    
-    if (newTheme === "dark") {
+    if (theme === "dark") {
       document.documentElement.classList.add("dark");
     } else {
       document.documentElement.classList.remove("dark");
     }
-  };
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const newTheme = prev === "light" ? "dark" : "light";
+      localStorage.setItem("theme", newTheme);
+      if (newTheme === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+      return newTheme;
+    });
+  }, []);
+
+  const value = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      {!mounted ? <div className="hidden">{children}</div> : children}
+    <ThemeContext.Provider value={value}>
+      {isClient ? children : <div className="hidden">{children}</div>}
     </ThemeContext.Provider>
   );
 }

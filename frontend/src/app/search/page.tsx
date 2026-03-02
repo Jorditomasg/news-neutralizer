@@ -4,12 +4,16 @@ import { useEffect, useState, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { SearchTask, ArticlePreview } from "@/types";
 import { SearchProgress } from "@/components/search/SearchProgress";
-import { SearchForm } from "@/components/search/SearchForm";
-import { FeedbackButtons } from "@/components/feedback/FeedbackButtons";
 import { useSmoothProgress } from "@/hooks/useSmoothProgress";
 import { useTaskContext } from "@/context/TaskContext";
 import { apiClient, ApiError } from "@/lib/api";
 import { useI18n } from "@/context/I18nContext";
+import { HeadlineConfirmModal } from "@/components/search/HeadlineConfirmModal";
+import { ArticlePreviewCard } from "@/components/search/ArticlePreviewCard";
+import { HeadlineGrid } from "@/components/search/HeadlineGrid";
+import { WarningBanner } from "@/components/search/WarningBanner";
+import { ResultsTabs } from "@/components/search/ResultsTabs";
+
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -40,26 +44,9 @@ function SearchContent() {
   const [failedHeadlineUrls, setFailedHeadlineUrls] = useState<Set<string>>(new Set());
   const [pendingHeadline, setPendingHeadline] = useState<ArticlePreview | null>(null);
 
-  const isUrl = (text: string) => {
-    return text.startsWith("http://") || text.startsWith("https://");
-  };
+  const isUrl = (text: string) => text.startsWith("http://") || text.startsWith("https://");
 
-  useEffect(() => {
-    if (!query || hasStarted.current) return;
-    hasStarted.current = true;
-
-    if (isUrl(query)) {
-      fetchPreview(query);
-    } else {
-      fetchHeadlines(query);
-    }
-  }, [query]);
-
-  useEffect(() => {
-    if (task?.status === "completed" && status !== "completed") {
-      setStatus("completed");
-    }
-  }, [task, status]);
+  // ── Data Fetching ────────────────────────────────────────────
 
   const fetchHeadlines = async (searchQuery: string) => {
     try {
@@ -68,7 +55,6 @@ function SearchContent() {
         method: "POST",
         body: JSON.stringify({ query: searchQuery }),
       });
-
       setHeadlines((data as ArticlePreview[]) || []);
       setShowHeadlines(true);
       setStatus("headlines_selection");
@@ -80,26 +66,10 @@ function SearchContent() {
     }
   };
 
-  const fetchPreview = async (url: string) => {
-    try {
-      setStatus("preview");
-      const data = await apiClient("/api/v1/search/preview", {
-        method: "POST",
-        body: JSON.stringify({ url }),
-      });
-
-      setPreviewData(data as ArticlePreview);
-    } catch (e) {
-      console.error("Preview failed, falling back to direct search", e);
-      startSearch(url);
-    }
-  };
-
-  const _recoverToHeadlines = (failedUrl?: string, errorMsg?: string) => {
-    // If we have headlines to go back to, show them with a warning
+  const recoverToHeadlines = (failedUrl?: string, errorMsg?: string) => {
     if (headlines.length > 0) {
       if (failedUrl) {
-        setFailedHeadlineUrls(prev => new Set(prev).add(failedUrl));
+        setFailedHeadlineUrls((prev) => new Set(prev).add(failedUrl));
       }
       setError(errorMsg || null);
       setStatus("headlines_selection");
@@ -111,10 +81,21 @@ function SearchContent() {
       setWarnings([]);
       setSelectedHeadline(null);
     } else {
-      // No headlines to recover to — show error inline
       setError(errorMsg || "Error durante el procesamiento");
       setStatus("error");
     }
+  };
+
+  const submitSearchTask = async (searchQuery: string, payload: Record<string, string>, headline?: ArticlePreview) => {
+    const data = await apiClient("/api/v1/search/", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const resData = data as { task_id: string; expected_duration_ms?: number };
+    setTaskId(resData.task_id);
+    if (resData.expected_duration_ms) setExpectedDurationMs(resData.expected_duration_ms);
+    addTask(resData.task_id, headline ? headline.title : searchQuery || "Analizando noticia...");
+    setStatus("pending");
   };
 
   const startSearch = async (searchQuery: string, headline?: ArticlePreview) => {
@@ -124,49 +105,100 @@ function SearchContent() {
       setPreviewData(null);
       setShowHeadlines(false);
       setWarnings([]);
-      if (headline) {
-        setSelectedHeadline(headline);
-      } else {
-        setSelectedHeadline(null);
-      }
+      setSelectedHeadline(headline || null);
 
-      const payload: any = { query: searchQuery };
+      const payload: Record<string, string> = { query: searchQuery };
       if (headline && !isUrl(query)) {
         payload.original_query = query;
       }
 
-      const data = await apiClient("/api/v1/search/", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
-      const resData = data as any;
-      setTaskId(resData.task_id);
-      if (resData.expected_duration_ms) setExpectedDurationMs(resData.expected_duration_ms);
-      addTask(resData.task_id, headline ? headline.title : query || "Analizando noticia...");
-      setStatus("pending");
-    } catch (e: any) {
-      if (e instanceof ApiError && e.status === 400 && e.body.includes("AMBIGUOUS_TOPIC")) {
-        try {
-          const errorData = JSON.parse(e.body);
-          if (errorData.detail && typeof errorData.detail === 'string' && errorData.detail.includes("AMBIGUOUS_TOPIC")) {
-            const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
-            setIsAmbiguous(true);
-            setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
-            setStatus("headlines_selection");
-            setShowHeadlines(true);
-            return;
-          }
-        } catch {}
-      }
-
-      if (!isAmbiguous) {
-        const errorMsg = e instanceof ApiError ? e.message : (typeof e.message === 'string' ? e.message : "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?");
-        _recoverToHeadlines(headline?.source_url, errorMsg);
-      }
-      hasStarted.current = false;
+      await submitSearchTask(searchQuery, payload, headline);
+    } catch (e: unknown) {
+      handleSearchError(e, headline);
     }
   };
+
+  const handleSearchError = (e: unknown, headline?: ArticlePreview) => {
+    if (e instanceof ApiError && e.status === 400 && e.body.includes("AMBIGUOUS_TOPIC")) {
+      try {
+        const errorData = JSON.parse(e.body);
+        if (errorData.detail?.includes?.("AMBIGUOUS_TOPIC")) {
+          const reason = errorData.detail.replace("AMBIGUOUS_TOPIC: ", "");
+          setIsAmbiguous(true);
+          setError(`Tema demasiado amplio: ${reason}. Por favor, selecciona una noticia concreta de la lista.`);
+          setStatus("headlines_selection");
+          setShowHeadlines(true);
+          return;
+        }
+      } catch { /* parse error — fall through */ }
+    }
+
+    if (!isAmbiguous) {
+      const errorMsg = getSearchErrorMessage(e);
+      recoverToHeadlines(headline?.source_url, errorMsg);
+    }
+    hasStarted.current = false;
+  };
+
+  const getSearchErrorMessage = (e: unknown): string => {
+    if (e instanceof ApiError) return e.message;
+    if (e instanceof Error) return e.message;
+    return "No se pudo iniciar la búsqueda. ¿Está el backend corriendo?";
+  };
+
+  const fetchPreview = async (url: string) => {
+    try {
+      setStatus("preview");
+      const data = await apiClient("/api/v1/search/preview", {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      setPreviewData(data as ArticlePreview);
+    } catch (e) {
+      console.error("Preview failed, falling back to direct search", e);
+      startSearch(url);
+    }
+  };
+
+  const fetchResults = async (id: string) => {
+    try {
+      const data = await apiClient(`/api/v1/search/${id}`);
+      const resData = data as SearchTask;
+      setTask(resData);
+      setStatus(resData.status);
+      if (resData.warnings?.length) {
+        setWarnings(resData.warnings);
+      }
+      if (resData.status === "completed") {
+        setProgress(100);
+      }
+    } catch (e) {
+      console.error("Failed to fetch results", e);
+    }
+  };
+
+  // ── Effects ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!query || hasStarted.current) return;
+    hasStarted.current = true;
+
+    void (async () => {
+      if (isUrl(query)) {
+        await fetchPreview(query);
+      } else {
+        await fetchHeadlines(query);
+      }
+    })();
+  }, [query]);
+
+  /* eslint-disable react-hooks/set-state-in-effect -- Sync status from task context */
+  useEffect(() => {
+    if (task?.status === "completed" && status !== "completed") {
+      setStatus("completed");
+    }
+  }, [task, status]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (!taskId) return;
@@ -179,10 +211,10 @@ function SearchContent() {
       const data = JSON.parse(event.data);
       setStatus(data.status);
       setProgress(data.progress);
-      setMessage(typeof data.message === 'string' ? data.message : '');
+      setMessage(typeof data.message === "string" ? data.message : "");
       if (data.expected_duration_ms) setExpectedDurationMs(data.expected_duration_ms);
 
-      if (data.warnings && Array.isArray(data.warnings) && data.warnings.length > 0) {
+      if (data.warnings?.length) {
         setWarnings(data.warnings);
       }
 
@@ -191,243 +223,126 @@ function SearchContent() {
       } else if (data.status === "redirected") {
         const existingTaskId = data.progress_message || data.message;
         if (existingTaskId) {
-            router.replace(`/search?taskId=${existingTaskId}`);
+          router.replace(`/search?taskId=${existingTaskId}`);
         }
       } else if (data.status === "failed") {
-        const errMsg = typeof data.error_message === 'string' ? data.error_message 
-          : typeof data.message === 'string' ? data.message : "Error durante el análisis";
-        _recoverToHeadlines(selectedHeadline?.source_url, errMsg);
+        let errMsg = "Error durante el análisis";
+        if (typeof data.error_message === "string") {
+          errMsg = data.error_message;
+        } else if (typeof data.message === "string") {
+          errMsg = data.message;
+        }
+        recoverToHeadlines(selectedHeadline?.source_url, errMsg);
       }
     };
 
-    return () => {
-      ws.close();
-    };
+    return () => { ws.close(); };
   }, [taskId]);
 
-  const fetchResults = async (id: string) => {
-    try {
-      const data = await apiClient(`/api/v1/search/${id}`);
-      const resData = data as any;
-      setTask(resData);
-      setStatus(resData.status);
-      if (resData.warnings && Array.isArray(resData.warnings) && resData.warnings.length > 0) {
-          setWarnings(resData.warnings);
-      }
-      if (resData.status === "completed") {
-          setProgress(100);
-      }
-    } catch (e) {
-      console.error("Failed to fetch results", e);
-    }
-  };
-
-  // If initialTaskId is present (reload/navigation), reconnect to the task
   useEffect(() => {
-      if (initialTaskId) {
-          // Fetch current state from API
-          fetchResults(initialTaskId).then(() => {
-            // Re-register in TaskContext so GlobalTaskTracker reconnects WebSocket
-            addTask(initialTaskId, query || "Analizando noticia...");
-          });
-      }
+    if (initialTaskId) {
+      void (async () => {
+        await fetchResults(initialTaskId);
+        addTask(initialTaskId, query || "Analizando noticia...");
+      })();
+    }
   }, [initialTaskId]);
 
+  // ── Event Handlers ───────────────────────────────────────────
 
-
-
-
-  const getBiasColor = (score: number) => {
-    if (score < 0.3) return { bg: "bg-emerald-500/10", text: "text-emerald-400", bar: "bg-emerald-500" };
-    if (score < 0.6) return { bg: "bg-amber-500/10", text: "text-amber-400", bar: "bg-amber-500" };
-    return { bg: "bg-red-500/10", text: "text-red-400", bar: "bg-red-500" };
+  const handleHeadlineConfirm = (headline: ArticlePreview) => {
+    setPendingHeadline(null);
+    startSearch(headline.source_url, headline);
   };
 
-  const getSeverityLabel = (severity: number) => {
-    const labels = ["", "Muy sutil", "Sutil", "Moderado", "Notable", "Grave"];
-    return labels[severity] || "Moderado";
-  };
+  // ── Render ───────────────────────────────────────────────────
 
-  const getDirectionIcon = (direction: string) => {
-    switch (direction) {
-      case "izquierda": return "←";
-      case "derecha": return "→";
-      case "centro": return "◆";
-      case "sensacionalista": return "⚡";
-      default: return "•";
-    }
-  };
+  // Build display article for header
+  const displayArticle = task?.source_article
+    ? { ...selectedHeadline, ...task.source_article }
+    : selectedHeadline;
 
-  const handleSearch = (q: string) => {
-    if (isUrl(q)) fetchPreview(q);
-    else fetchHeadlines(q);
-  };
+  const showHeader = status !== "idle" && status !== "error" && status !== "headlines_selection" && status !== "headlines_loading";
 
   return (
     <div className="animate-fade-in max-w-5xl mx-auto">
-
-      {/* ── Headline Confirmation Modal ──────────────────────── */}
+      {/* ── Headline Confirmation Modal ────────────────── */}
       {pendingHeadline && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-            onClick={() => setPendingHeadline(null)}
-          />
-          {/* Modal */}
-          <div className="relative w-full max-w-xl rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-[#111] shadow-2xl shadow-black/60 p-7 animate-fade-in transition-colors">
-            {/* Header */}
-            <div className="flex items-start gap-3 mb-5">
-              <div className="shrink-0 mt-0.5 h-8 w-8 rounded-full bg-teal-500/20 flex items-center justify-center">
-                <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold uppercase tracking-widest text-teal-600 dark:text-teal-400 transition-colors mb-1">{t?.search.selected_news_title}</p>
-                <h2 className="text-lg font-bold text-gray-900 dark:text-white transition-colors leading-snug">{pendingHeadline.title}</h2>
-              </div>
-            </div>
-
-            {/* Meta */}
-            <div className="flex flex-wrap gap-3 mb-6 text-sm text-gray-400">
-              <div className="flex items-center gap-2 rounded-lg bg-white/5 dark:bg-white/5 border border-gray-200 dark:border-white/5 px-3 py-2">
-                <span className="text-xs font-bold uppercase tracking-wide text-gray-500">{t?.search.source}</span>
-                <span className="font-semibold text-gray-900 dark:text-white">{pendingHeadline.source_name}</span>
-              </div>
-              {pendingHeadline.published_at && (
-                <div className="flex items-center gap-2 rounded-lg bg-white/5 dark:bg-white/5 border border-gray-200 dark:border-white/5 px-3 py-2">
-                  <span className="text-xs font-bold uppercase tracking-wide text-gray-500">{t?.search.date}</span>
-                  <span>{new Date(pendingHeadline.published_at).toLocaleDateString()}</span>
-                </div>
-              )}
-            </div>
-
-            {/* URL preview */}
-            <div className="mb-7 rounded-lg bg-gray-50 dark:bg-white/[0.03] border border-gray-200 dark:border-white/5 transition-colors px-4 py-2.5">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-gray-500 mb-1">{t?.search.link}</p>
-              <a
-                href={pendingHeadline.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-teal-400/80 hover:text-teal-300 truncate block transition-colors"
-              >
-                {pendingHeadline.source_url.length > 80
-                  ? pendingHeadline.source_url.slice(0, 80) + '…'
-                  : pendingHeadline.source_url}
-              </a>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => {
-                  const h = pendingHeadline;
-                  setPendingHeadline(null);
-                  startSearch(h.source_url, h);
-                }}
-                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 active:scale-95"
-              >
-                {t?.search.continue_analysis}
-              </button>
-              <button
-                onClick={() => setPendingHeadline(null)}
-                className="flex-1 py-3 rounded-xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/[0.03] hover:bg-gray-100 dark:hover:bg-white/[0.07] text-gray-700 dark:text-gray-300 font-semibold text-sm transition-all active:scale-95"
-              >
-                {t?.search.cancel}
-              </button>
-            </div>
-          </div>
-        </div>
+        <HeadlineConfirmModal
+          headline={pendingHeadline}
+          onConfirm={handleHeadlineConfirm}
+          onCancel={() => setPendingHeadline(null)}
+          t={t}
+        />
       )}
 
-      {/* Header - Show during Progress, Results, and Preview */}
-      {(status !== "idle" && status !== "error" && status !== "headlines_selection" && status !== "headlines_loading") && (() => {
-        const displayArticle = task?.source_article 
-          ? { ...selectedHeadline, ...task.source_article } 
-          : selectedHeadline;
-
-        return (
-          <div className="mb-8">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="h-8 w-1 rounded-full bg-gradient-to-b from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-500" />
-              {task?.status === "completed" && task.source_article ? (
-                <h1 className="font-display text-3xl font-bold leading-tight text-gray-900 dark:text-white/90 transition-colors">
-                  {task.source_article.title}
-                </h1>
-              ) : (
-                <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">{t?.search.title}</h1>
-              )}
-            </div>
-
+      {/* ── Header ─────────────────────────────────────── */}
+      {showHeader && (
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="h-8 w-1 rounded-full bg-gradient-to-b from-teal-500 to-cyan-500 dark:from-teal-400 dark:to-cyan-500" />
             {task?.status === "completed" && task.source_article ? (
-              <div className="pl-[1.4rem] mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
-                <div className="flex items-center gap-2">
-                  <span className="text-teal-700 dark:text-teal-400 font-medium">{task.source_article.source_name}</span>
-                  {task.source_article.source_url && (
-                    <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
-                      🔗 {new URL(task.source_article.source_url).hostname}
-                    </a>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-full bg-gray-200 dark:bg-white/10 text-xs text-gray-700 dark:text-gray-300">{t?.search.completed}</span>
-                </div>
-              </div>
-            ) : displayArticle ? (
-              <div className="pl-[1.4rem] mt-2">
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1 leading-snug transition-colors">{displayArticle.title}</h2>
-                <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 transition-colors">
-                  <span className="text-teal-600 dark:text-teal-400 font-medium transition-colors">{displayArticle.source_name}</span>
-                  {displayArticle.source_url && (
-                    <a href={displayArticle.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
-                      🔗 {new URL(displayArticle.source_url).hostname}
-                    </a>
-                  )}
-                  {displayArticle.published_at && (
-                    <span>{new Date(displayArticle.published_at).toLocaleDateString()}</span>
-                  )}
-                </div>
-              </div>
+              <h1 className="font-display text-3xl font-bold leading-tight text-gray-900 dark:text-white/90 transition-colors">
+                {task.source_article.title}
+              </h1>
             ) : (
-              <p className="mt-2 text-gray-500 dark:text-gray-400 pl-[1.4rem]">
-                Tema: <span className="text-teal-700 dark:text-teal-400 font-medium break-all">&quot;{task?.source_article?.title || task?.query || query}&quot;</span>
-                {task?.source_article?.source_url && (
-                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="ml-3 opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity break-all">
+              <h1 className="font-display text-3xl font-bold text-gray-900 dark:text-white transition-colors">{t.search.title}</h1>
+            )}
+          </div>
+
+          {task?.status === "completed" && task.source_article ? (
+            <div className="pl-[1.4rem] mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
+              <div className="flex items-center gap-2">
+                <span className="text-teal-700 dark:text-teal-400 font-medium">{task.source_article.source_name}</span>
+                {task.source_article.source_url && (
+                  <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
                     🔗 {new URL(task.source_article.source_url).hostname}
                   </a>
                 )}
-              </p>
-            )}
-          </div>
-        );
-      })()}
-
-      {/* ── Paywall / Truncation Warnings ────────────────────── */}
-      {warnings.length > 0 && (
-        <div className="mb-6 space-y-2 animate-fade-in">
-          {warnings.map((warning, i) => (
-            <div
-              key={i}
-              className="rounded-2xl border border-amber-500/20 bg-amber-50 dark:bg-amber-500/5 p-5 backdrop-blur-sm"
-            >
-              <div className="flex gap-3 items-start">
-                <div className="shrink-0 mt-0.5 h-8 w-8 rounded-full bg-amber-100 dark:bg-amber-500/10 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="font-bold text-amber-800 dark:text-amber-400 text-sm mb-1">Contenido posiblemente incompleto</h3>
-                  <p className="text-amber-700/90 dark:text-amber-300/80 text-sm leading-relaxed">{warning}</p>
-                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-full bg-gray-200 dark:bg-white/10 text-xs text-gray-700 dark:text-gray-300">{t.search.completed}</span>
               </div>
             </div>
-          ))}
+          ) : (
+            (() => {
+              if (displayArticle) {
+                return (
+                  <div className="pl-[1.4rem] mt-2">
+                    <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1 leading-snug transition-colors">{displayArticle.title}</h2>
+                    <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400 transition-colors">
+                      <span className="text-teal-600 dark:text-teal-400 font-medium transition-colors">{displayArticle.source_name}</span>
+                      {displayArticle.source_url && (
+                        <a href={displayArticle.source_url} target="_blank" rel="noopener noreferrer" className="opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity">
+                          🔗 {new URL(displayArticle.source_url).hostname}
+                        </a>
+                      )}
+                      {displayArticle.published_at && (
+                        <span>{new Date(displayArticle.published_at).toLocaleDateString()}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <p className="mt-2 text-gray-500 dark:text-gray-400 pl-[1.4rem]">
+                  Tema: <span className="text-teal-700 dark:text-teal-400 font-medium break-all">&quot;{task?.source_article?.title || task?.query || query}&quot;</span>
+                  {task?.source_article?.source_url && (
+                    <a href={task.source_article.source_url} target="_blank" rel="noopener noreferrer" className="ml-3 opacity-60 hover:opacity-100 text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-opacity break-all">
+                      🔗 {new URL(task.source_article.source_url).hostname}
+                    </a>
+                  )}
+                </p>
+              );
+            })()
+          )}
         </div>
       )}
 
-      {/* Integrated Progress UI - Below Header */}
+      {/* ── Warnings ───────────────────────────────────── */}
+      <WarningBanner warnings={warnings} />
+
+      {/* ── Progress ───────────────────────────────────── */}
       {(status === "starting" || status === "pending" || status === "scraping" || status === "analyzing") && (
         <SearchProgress
           status={status === "starting" ? "pending" : status}
@@ -437,184 +352,29 @@ function SearchContent() {
         />
       )}
 
+      {/* ── Preview Card ───────────────────────────────── */}
       {status === "preview" && previewData && (
-        <div className="mb-10 animate-fade-in relative z-10">
-          <div className="rounded-3xl border border-gray-200/50 dark:border-white/10 bg-white dark:bg-[#111] shadow-2xl shadow-teal-500/5 overflow-hidden transition-colors flex flex-col md:flex-row">
-            
-            {/* Left side: Image or Pattern */}
-            <div className="md:w-5/12 relative min-h-[250px] md:min-h-full bg-gray-100 dark:bg-zinc-900 overflow-hidden shrink-0">
-              {previewData.image_url ? (
-                <>
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent z-10" />
-                  <img 
-                    src={previewData.image_url} 
-                    alt={previewData.title}
-                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 hover:scale-105"
-                  />
-                  {/* Floating Action Button over image on desktop */}
-                  <div className="absolute bottom-6 left-6 right-6 z-20 hidden md:block">
-                    <button
-                      onClick={() => startSearch(query, previewData)}
-                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/25 hover:shadow-cyan-500/30 active:scale-95 flex justify-center items-center gap-2"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                      <span>{t?.search.deep_analysis}</span>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center opacity-10 scale-150">
-                   <span className="text-9xl">📰</span>
-                </div>
-              )}
-            </div>
-
-            {/* Right side: Content */}
-            <div className="p-8 md:p-10 flex flex-col flex-1 relative">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="bg-teal-500/10 text-teal-600 dark:text-teal-400 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase">
-                  {previewData.source_name}
-                </span>
-                {previewData.published_at && (
-                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                    {new Date(previewData.published_at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </span>
-                )}
-                {previewData.has_paywall && (
-                   <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase ml-auto">
-                     {t?.search.possible_paywall}
-                   </span>
-                )}
-              </div>
-
-              <h2 className="text-2xl md:text-3xl font-display font-bold text-gray-900 dark:text-white mb-6 leading-tight transition-colors">
-                {previewData.title}
-              </h2>
-
-              <div className="prose-custom prose-gray dark:prose-invert max-w-none flex-1 mb-8">
-                {previewData.body ? (
-                  <>
-                    <p className="text-gray-700 dark:text-gray-300 text-lg font-medium leading-relaxed border-l-2 border-teal-500/40 pl-4 mb-5">
-                      {previewData.body.split('\n').find(p => p.trim() && p.trim().length > 20) || t?.search.no_summary}
-                    </p>
-                    <div className="space-y-4 text-gray-600 dark:text-gray-400 leading-relaxed text-[15px] relative">
-                      {/* Gradient fade to indicate more content */}
-                      <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-white dark:from-[#111] to-transparent z-10 pointer-events-none" />
-                      {previewData.body.split('\n')
-                        .filter(p => p.trim())
-                        .slice(1, 4) // Show up to 3 more paragraphs
-                        .map((p, i) => (
-                          <p key={i}>{p}</p>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-gray-500 italic">No se pudo extraer el contenido del artículo. Procede al análisis para más detalles.</p>
-                )}
-              </div>
-
-              <div className="mt-auto block md:hidden">
-                <button
-                  onClick={() => startSearch(query, previewData)}
-                  className="w-full py-4 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-gray-950 font-bold text-sm transition-all shadow-lg shadow-teal-500/20 hover:shadow-teal-500/30 active:scale-95 flex justify-center items-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                  <span>{t?.search.send_to_ai}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ArticlePreviewCard
+          previewData={previewData}
+          onStartAnalysis={() => startSearch(query, previewData)}
+          t={t}
+        />
       )}
 
+      {/* ── Headlines Grid ─────────────────────────────── */}
       {showHeadlines && (
-        <div className="animate-fade-in space-y-6 mb-12">
-          <div className="rounded-2xl border border-teal-500/20 bg-teal-50 dark:bg-teal-500/5 p-6 backdrop-blur-sm transition-colors">
-            <div className="flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white transition-colors mb-2">
-                  {headlines.length > 0 ? t?.search.what_to_analyze : t?.search.no_headlines}
-                </h2>
-                <p className="text-gray-600 dark:text-gray-400 transition-colors text-sm">
-                  {headlines.length > 0 ? (
-                    <>Hemos encontrado varias noticias recientes sobre <span className="text-teal-600 dark:text-teal-400 transition-colors">&quot;{query}&quot;</span>.<br />Selecciona una noticia específica o analiza el tema en general.</>
-                  ) : (
-                    <>No pudimos encontrar noticias recientes de forma rápida sobre <span className="text-teal-600 dark:text-teal-400 transition-colors">&quot;{query}&quot;</span>.<br />Puedes forzar un análisis profundo para que la IA busque exhaustivamente en la red.</>
-                  )}
-                </p>
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                {!isAmbiguous ? (
-                  <button
-                    onClick={() => startSearch(query)}
-                    className="whitespace-nowrap px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-400 hover:to-cyan-500 text-white font-bold shadow-lg shadow-teal-500/20 transition-all transform hover:scale-105 active:scale-95 ring-1 ring-white/20"
-                  >
-                    ⚡ {t?.search.analyze_global}
-                  </button>
-                ) : (
-                  <div className="text-right">
-                    <span className="text-amber-400 text-xs font-bold uppercase tracking-wider bg-amber-500/10 px-2 py-1 rounded">
-                      Tema demasiado amplio
-                    </span>
-                    <p className="text-gray-400 text-xs mt-1 max-w-[200px]">
-                      Selecciona una noticia concreta para continuar.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {headlines.map((headline, idx) => {
-              const isFailed = failedHeadlineUrls.has(headline.source_url);
-              return (
-                <button
-                  key={idx}
-                  onClick={() => setPendingHeadline(headline)}
-                  className={`text-left group relative flex flex-col justify-between h-full rounded-xl border p-5 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-teal-900/10 ${
-                    isFailed
-                      ? 'border-amber-500/30 bg-amber-50/50 hover:bg-amber-50 dark:bg-amber-500/[0.04] dark:hover:bg-amber-500/[0.07]'
-                      : 'border-gray-200 dark:border-white/5 bg-white dark:bg-white/[0.02] hover:bg-gray-50 dark:hover:bg-white/[0.05] hover:border-teal-300 dark:hover:border-teal-500/30 shadow-sm dark:shadow-none'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold tracking-wider text-teal-400 uppercase bg-teal-500/10 px-2 py-0.5 rounded-md">
-                          {headline.source_name || "Noticia"}
-                        </span>
-                        {isFailed && (
-                          <span className="text-[10px] font-bold tracking-wider text-amber-400 uppercase bg-amber-500/10 px-2 py-0.5 rounded-md flex items-center gap-1">
-                            ⚠️ Error previo
-                          </span>
-                        )}
-                      </div>
-                      {headline.published_at && (
-                        <span className="text-[10px] text-gray-500">
-                          {new Date(headline.published_at).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="font-bold text-gray-900 dark:text-gray-200 group-hover:text-teal-600 dark:group-hover:text-white mb-3 line-clamp-3 leading-snug transition-colors">
-                      {headline.title}
-                    </h3>
-                  </div>
-                  <div className="mt-4 flex items-center text-xs font-medium text-gray-500 group-hover:text-teal-400 transition-colors">
-                    <span>{isFailed ? 'Reintentar análisis' : 'Analizar esta noticia'}</span>
-                    <svg className="w-3 h-3 ml-1 transform group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                    </svg>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <HeadlineGrid
+          headlines={headlines}
+          query={query}
+          isAmbiguous={isAmbiguous}
+          failedUrls={failedHeadlineUrls}
+          onSelect={(h) => setPendingHeadline(h)}
+          onAnalyzeGlobal={() => startSearch(query)}
+          t={t}
+        />
       )}
 
-
-
+      {/* ── Error Banner ───────────────────────────────── */}
       {(error || status === "failed") && (
         <div className="mb-8 rounded-2xl border border-red-500/20 bg-red-500/5 p-6">
           <div className="flex gap-3 items-start">
@@ -629,340 +389,14 @@ function SearchContent() {
         </div>
       )}
 
-      {/* ── Paywall / Truncation Warnings ────────────────────── */}
-      {/* Moved to top above SearchProgress */}
-
-      {task && task.status === "completed" && (
-        <div className="space-y-6">
-          <div className="flex gap-1 p-1 rounded-xl bg-gray-100 dark:bg-white/[0.03] border border-gray-200 dark:border-white/10 transition-colors">
-            {([
-              { key: "article" as const, label: "📝 Artículo neutralizado", icon: "" },
-              { key: "bias" as const, label: "🎯 Sesgo detectado", icon: "" },
-              { key: "sources" as const, label: "📊 Posibles Fuentes", icon: "" },
-            ]).map(tab => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === tab.key
-                    ? "bg-teal-50 dark:bg-white/10 text-teal-800 dark:text-gray-100 shadow-sm dark:shadow-none border border-teal-200 dark:border-white/10"
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.03]"
-                  }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === "article" && task.analysis && (
-            <div className="space-y-6 animate-fade-in">
-              <div className="rounded-2xl border border-teal-500/20 bg-gradient-to-br from-teal-500/5 to-cyan-500/5 p-6">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="h-5 w-5 rounded-full bg-teal-100 dark:bg-teal-400/20 flex items-center justify-center">
-                    <div className="h-2 w-2 rounded-full bg-teal-600 dark:bg-teal-400" />
-                  </div>
-                  <span className="text-xs font-medium text-teal-700 dark:text-teal-400 tracking-wider uppercase">Resumen del tema</span>
-                </div>
-                <p className="text-gray-800 dark:text-gray-200 leading-relaxed text-lg transition-colors">
-                  {task.analysis.topic_summary}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none overflow-hidden transition-colors">
-                <div className="border-b border-gray-100 dark:border-white/10 px-6 py-4 bg-gray-50/50 dark:bg-white/[0.02] transition-colors">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg">✍️</span>
-                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">
-                      Artículo neutralizado
-                    </h2>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Generado por IA a partir de {task.articles.length} fuentes · {task.analysis.provider_used}
-                  </p>
-                </div>
-                <div className="p-6 md:p-8">
-                  {(() => {
-                    const articleObj = task.analysis.neutralized_article;
-                    if (!articleObj) return null;
-                    const { title, content } = articleObj;
-                    const paragraphs = content ? content.split("\n").filter(p => p.trim()) : [];
-                    
-                    return (
-                      <article className="prose-custom prose-gray dark:prose-invert">
-                        {title && (
-                          <h2 className="font-display text-2xl md:text-3xl font-bold text-gray-900 dark:text-white mb-6 leading-tight transition-colors">
-                            {title.replace(/^\[?TITULAR[:\s]*/i, "").replace(/\]$/, "").trim()}
-                          </h2>
-                        )}
-                        {paragraphs.map((paragraph, i) => (
-                          <p key={i} className={`text-gray-700 dark:text-gray-300 leading-relaxed transition-colors ${i === 0 ? 'text-lg font-medium border-l-2 border-teal-500/40 pl-4 mb-6' : 'mb-4'}`}>
-                            {paragraph.replace(/^\[?CUERPO[:\s]*/i, "").replace(/^\[?ENTRADILLA[:\s]*/i, "").replace(/^\[?CONCLUSI[ÓO]N[:\s]*/i, "").replace(/\]$/, "")}
-                          </p>
-                        ))}
-                      </article>
-                    );
-                  })()}
-                </div>
-                {/* Feedback Widget for the Overall Analysis */}
-                <div className="border-t border-white/10 px-6 py-4 bg-white/[0.01] flex justify-end">
-                  <FeedbackButtons targetType="analysis" targetId={task.task_id} />
-                </div>
-              </div>
-
-              {task.analysis.objective_facts.length > 0 && (
-                <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="text-lg">📋</span>
-                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">Hechos verificados</h2>
-                    <span className="ml-auto rounded-full bg-teal-100 dark:bg-teal-500/10 px-2.5 py-0.5 text-xs font-medium text-teal-700 dark:text-teal-400">
-                      {task.analysis.objective_facts.length}
-                    </span>
-                  </div>
-                  <div className="grid gap-2">
-                    {task.analysis.objective_facts.map((fact, i) => (
-                      <div key={i} className="flex gap-3 items-start rounded-xl bg-gray-50 dark:bg-white/[0.02] p-3 border border-gray-100 dark:border-white/5 transition-colors">
-                        <span className="shrink-0 mt-0.5 h-5 w-5 rounded-full bg-teal-100 dark:bg-teal-500/10 flex items-center justify-center text-xs font-bold text-teal-600 dark:text-teal-400">
-                          {i + 1}
-                        </span>
-                        <span className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed transition-colors">{fact}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "bias" && task.analysis && (
-            <div className="space-y-4 animate-fade-in">
-              {task.analysis.bias_elements.length > 0 ? (
-                <>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 transition-colors">
-                      Se detectaron <span className="text-gray-900 dark:text-white font-medium transition-colors">{task.analysis.bias_elements.length}</span> elementos de sesgo
-                    </p>
-                  </div>
-                  {task.analysis.bias_elements.map((bias, i) => (
-                    <div
-                      key={i}
-                      className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none overflow-hidden transition-all hover:border-gray-300 dark:hover:border-white/20"
-                    >
-                      <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.01]">
-                        <span className={`rounded-lg px-2.5 py-1 text-xs font-bold tracking-wide uppercase ${bias.type === "sensacionalismo" ? "bg-red-100/50 dark:bg-red-500/10 text-red-600 dark:text-red-400" :
-                            bias.type === "omisión" ? "bg-purple-100/50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400" :
-                              bias.type === "framing" ? "bg-amber-100/50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400" :
-                                bias.type === "adjetivación" ? "bg-orange-100/50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400" :
-                                  "bg-pink-100/50 dark:bg-pink-500/10 text-pink-600 dark:text-pink-400"
-                          }`}>
-                          {bias.type}
-                        </span>
-                        <span className="text-xs text-gray-500">en</span>
-                        <span className="text-sm font-medium text-gray-800 dark:text-gray-300">{bias.source}</span>
-                        <div className="flex gap-1 ml-auto items-center">
-                          <span className="text-xs text-gray-500 mr-1">{getSeverityLabel(bias.severity)}</span>
-                          {Array.from({ length: 5 }).map((_, j) => (
-                            <div
-                              key={j}
-                              className={`h-2.5 w-2.5 rounded-sm transition-all ${j < bias.severity
-                                  ? bias.severity >= 4 ? "bg-red-400" : bias.severity >= 3 ? "bg-amber-400" : "bg-yellow-400/60"
-                                  : "bg-white/10"
-                                }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                      <div className="px-5 py-4 space-y-3">
-                        <blockquote className="text-sm text-gray-500 dark:text-gray-400 italic border-l-2 border-amber-500/30 pl-4 py-1 transition-colors">
-                          &quot;{bias.original_text}&quot;
-                        </blockquote>
-                        <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed transition-colors">
-                          <span className="text-teal-600 dark:text-teal-400 font-medium transition-colors">Análisis: </span>
-                          {bias.explanation}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] p-8 text-center shadow-sm dark:shadow-none transition-colors">
-                  <span className="text-4xl mb-3 block">✅</span>
-                  <p className="text-gray-700 dark:text-gray-300 transition-colors">No se detectaron elementos de sesgo significativos</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "sources" && (
-            <div className="space-y-6 animate-fade-in">
-              {task.analysis && Object.keys(task.analysis.source_bias_scores).length > 0 && (
-                <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
-                  <div className="flex items-center gap-2 mb-5">
-                    <span className="text-lg">📊</span>
-                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">Comparación de sesgo por fuente</h2>
-                  </div>
-                  <div className="space-y-4">
-                    {Object.entries(task.analysis.source_bias_scores)
-                      .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0))
-                      .map(([source, scores]) => {
-                        const color = getBiasColor(scores.score);
-                        return (
-                          <div key={source} className="rounded-xl border border-gray-100 dark:border-white/5 bg-gray-50 dark:bg-white/[0.02] p-4 transition-colors">
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <span className="text-base">{getDirectionIcon(scores.direction)}</span>
-                                <span className="font-medium text-gray-900 dark:text-white transition-colors">{source}</span>
-                              </div>
-                              <div className="flex items-center gap-3">
-                                <FeedbackButtons targetType="domain" targetId={source} compact />
-                                <div className="flex items-center gap-2">
-                                  <span className={`rounded-lg px-2 py-0.5 text-xs font-medium capitalize ${color.bg} ${color.text}`}>
-                                    {scores.direction}
-                                  </span>
-                                  <span className={`font-mono text-sm font-bold ${color.text}`}>
-                                    {(scores.score * 100).toFixed(0)}%
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
-                              <div
-                                className={`h-full rounded-full ${color.bar} transition-all duration-700`}
-                                style={{ width: `${scores.score * 100}%` }}
-                              />
-                            </div>
-                            <div className="flex justify-between mt-1.5 transition-colors">
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.neutral}</span>
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.confidence}{((scores.confidence || 0) * 100).toFixed(0)}%</span>
-                              <span className="text-[10px] text-gray-500 dark:text-gray-400">{t?.search.max_bias}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {task.articles.length > 0 && (
-                <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] shadow-sm dark:shadow-none p-6 transition-colors">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="text-lg">📰</span>
-                    <h2 className="font-display text-lg font-bold text-gray-900 dark:text-white transition-colors">{t?.search.related_articles}</h2>
-                    <span className="ml-auto rounded-full bg-gray-100 dark:bg-white/5 px-2.5 py-0.5 text-xs font-medium text-gray-600 dark:text-gray-400">
-                      {task.articles.length}
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {task.articles.map((article) => {
-                      const isAnalyzed = article.status === 'ANALYZED' || article.status === 'CONTEXTUALIZED';
-                      return (
-                        <div
-                          key={article.id}
-                          className="flex items-center gap-4 rounded-xl border border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.02] p-4 transition-all hover:border-teal-300 dark:hover:border-teal-500/20 hover:bg-white dark:hover:bg-white/[0.04] group"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <a
-                              href={article.source_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-medium text-gray-900 dark:text-white truncate block group-hover:text-teal-600 dark:group-hover:text-teal-300 transition-colors"
-                            >
-                              {article.title}
-                            </a>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-xs font-medium text-gray-400">{article.source_name}</span>
-                              {article.author && (
-                                <>
-                                  <span className="text-gray-600">·</span>
-                                  <span className="text-xs text-gray-500 truncate max-w-[200px]">{article.author}</span>
-                                </>
-                              )}
-                              {article.published_at && (
-                                <>
-                                  <span className="text-gray-600">·</span>
-                                  <span className="text-xs text-gray-500">
-                                    {new Date(article.published_at).toLocaleDateString("es-ES")}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {article.is_source && (
-                            <span className="shrink-0 rounded-md bg-blue-100 dark:bg-blue-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-blue-700 dark:text-blue-300 ring-1 ring-inset ring-blue-500/30">
-                              {t?.search.base_article}
-                            </span>
-                          )}
-
-                          {isAnalyzed ? (
-                            <span className="shrink-0 rounded-md bg-teal-100 dark:bg-teal-500/20 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-300 ring-1 ring-inset ring-teal-500/30 flex items-center gap-1">
-                              ✅ {t?.search.analyzed}
-                            </span>
-                          ) : (
-                            <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset ${
-                              article.status === 'DETECTING' || article.status === 'DETECTED' ? 'bg-gray-200 dark:bg-gray-500/20 text-gray-700 dark:text-gray-300 ring-gray-400 dark:ring-gray-500/30' :
-                              article.status === 'ANALYZING' ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 ring-amber-400/50 dark:ring-amber-500/30' :
-                              'bg-gray-200 dark:bg-gray-500/20 text-gray-700 dark:text-gray-300 ring-gray-400 dark:ring-gray-500/30'
-                            }`}>
-                              {article.status === 'DETECTED' ? t?.search.detected :
-                               article.status === 'ANALYZING' ? t?.search.analyzing :
-                               article.status || t?.search.detected}
-                            </span>
-                          )}
-
-                          {article.bias_score !== null && article.bias_score !== undefined && (
-                            <div className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-mono font-bold ${getBiasColor(article.bias_score).bg} ${getBiasColor(article.bias_score).text}`}>
-                              {(article.bias_score * 100).toFixed(0)}%
-                            </div>
-                          )}
-
-                          {/* Analizar button — only for non-source, non-analyzed articles */}
-                          {!article.is_source && !isAnalyzed && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/search?q=${encodeURIComponent(article.source_url)}`);
-                              }}
-                              className="shrink-0 rounded-lg bg-gradient-to-r from-teal-500/80 to-cyan-500/80 px-3 py-1.5 text-[11px] font-bold text-gray-950 transition-all hover:from-teal-400 hover:to-cyan-400 hover:shadow-md hover:shadow-teal-500/20 active:scale-95"
-                            >
-                              {t?.search.analyze_button}
-                            </button>
-                          )}
-
-                          <FeedbackButtons targetType="article" targetId={article.id} compact />
-                          <a
-                            href={article.source_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="shrink-0"
-                          >
-                            <svg className="w-4 h-4 text-gray-500 group-hover:text-teal-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                          </a>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {!task.analysis && task.articles.length > 0 && (
-            <div className="rounded-2xl border border-amber-500/20 bg-amber-50 dark:bg-amber-500/5 p-6">
-              <div className="flex gap-3 items-start">
-                <span className="text-2xl">⏳</span>
-                <div>
-                  <h3 className="font-bold text-amber-800 dark:text-amber-400 mb-1">{t?.search.articles_no_analysis}</h3>
-                  <p className="text-amber-700/80 dark:text-amber-300/70 text-sm">
-                    {t?.search.articles_no_analysis_desc.replace("{count}", task.articles.length.toString())}
-                    <br />
-                    {t?.search.verify_ollama}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* ── Results Tabs ───────────────────────────────── */}
+      {task?.status === "completed" && (
+        <ResultsTabs
+          task={task}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          t={t}
+        />
       )}
     </div>
   );
@@ -971,8 +405,8 @@ function SearchContent() {
 function SearchContentWrapper() {
   const searchParams = useSearchParams();
   const q = searchParams.get("q") || "";
-  const t = searchParams.get("taskId") || "";
-  return <SearchContent key={`${q}-${t}`} />;
+  const taskIdParam = searchParams.get("taskId") || "";
+  return <SearchContent key={`${q}-${taskIdParam}`} />;
 }
 
 export default function SearchPage() {

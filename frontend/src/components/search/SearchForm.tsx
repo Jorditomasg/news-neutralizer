@@ -6,10 +6,10 @@ interface SearchFormProps {
   isLoading: boolean;
 }
 
-export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
+export function SearchForm({ onSearch, isLoading }: Readonly<SearchFormProps>) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const isUrl = (text: string) => text.startsWith("http://") || text.startsWith("https://") || !!text.match(/^www\./);
+  const isUrl = (text: string) => text.startsWith("http://") || text.startsWith("https://") || /^www\./.exec(text) !== null;
   const isUrlDetected = isUrl(query);
 
   const handleSubmit = () => {

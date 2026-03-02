@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from "react";
 
 export interface TaskItem {
   id: string;
@@ -24,7 +24,7 @@ interface TaskContextType {
 const STORAGE_KEY = "nn_tasks";
 
 function loadTasks(): TaskItem[] {
-  if (typeof window === "undefined") return [];
+  if (globalThis.window === undefined) return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
@@ -35,7 +35,7 @@ function loadTasks(): TaskItem[] {
 }
 
 function saveTasks(tasks: TaskItem[]) {
-  if (typeof window === "undefined") return;
+  if (globalThis.window === undefined) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
   } catch {
@@ -45,20 +45,17 @@ function saveTasks(tasks: TaskItem[]) {
 
 const TaskContext = createContext<TaskContextType | undefined>(undefined);
 
-export function TaskProvider({ children }: { children: ReactNode }) {
-  const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+export function TaskProvider({ children }: Readonly<{ children: ReactNode }>) {
+  const [tasks, setTasks] = useState<TaskItem[]>(loadTasks);
+  const hydratedRef = useRef(globalThis.window !== undefined);
 
-  // Hydrate from localStorage on mount (client only)
   useEffect(() => {
-    setTasks(loadTasks());
-    setHydrated(true);
+    hydratedRef.current = true;
   }, []);
 
-  // Persist every time tasks change (after hydration)
   useEffect(() => {
-    if (hydrated) saveTasks(tasks);
-  }, [tasks, hydrated]);
+    if (hydratedRef.current) saveTasks(tasks);
+  }, [tasks]);
 
   const addTask = useCallback((id: string, title: string) => {
     setTasks((prev) => {
@@ -93,8 +90,13 @@ export function TaskProvider({ children }: { children: ReactNode }) {
     setTasks((prev) => prev.filter((t) => t.status !== "completed" && t.status !== "error"));
   }, []);
 
+  const value = useMemo(
+    () => ({ tasks, addTask, updateTaskProgress, completeTask, failTask, removeTask, clearCompletedTasks }),
+    [tasks, addTask, updateTaskProgress, completeTask, failTask, removeTask, clearCompletedTasks]
+  );
+
   return (
-    <TaskContext.Provider value={{ tasks, addTask, updateTaskProgress, completeTask, failTask, removeTask, clearCompletedTasks }}>
+    <TaskContext.Provider value={value}>
       {children}
     </TaskContext.Provider>
   );

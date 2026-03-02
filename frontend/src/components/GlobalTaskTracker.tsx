@@ -7,7 +7,7 @@ import { useI18n } from "@/context/I18nContext";
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
 // Child component to handle individual task WebSocket connection
-function TaskConnection({ task }: { task: TaskItem }) {
+function TaskConnection({ task }: Readonly<{ task: TaskItem }>) {
   const { updateTaskProgress, completeTask, failTask } = useTaskContext();
   const { t } = useI18n();
 
@@ -20,13 +20,13 @@ function TaskConnection({ task }: { task: TaskItem }) {
       const data = JSON.parse(event.data);
       
       if (data.status === "completed") {
-        completeTask(task.id, t?.tasks.completed);
+        completeTask(task.id, t.tasks.completed);
         ws.close();
       } else if (data.status === "failed") {
-        failTask(task.id, data.error_message || t?.tasks.error);
+        failTask(task.id, data.error_message || t.tasks.error);
         ws.close();
       } else if (data.status === "not_found") {
-        failTask(task.id, data.message || t?.tasks.error);
+        failTask(task.id, data.message || t.tasks.error);
         ws.close();
       } else {
         const progress = data.progress || 0;
